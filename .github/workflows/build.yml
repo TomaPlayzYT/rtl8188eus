@@ -8,11 +8,8 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout Driver Source (Modern Fork)
+      - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          repository: 'KanuX-14/rtl8188eus'
-          path: driver
 
       - name: Set up Build Dependencies & Toolchains
         run: |
@@ -38,11 +35,11 @@ jobs:
 
       - name: Compile 8188eu.ko Module (GKI 5.15, arm64)
         run: |
-          make -C $(pwd)/kernel M=$(pwd)/driver ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- modules
+          make -C $(pwd)/kernel M=$(pwd) ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- modules
 
       - name: Upload 8188eu.ko Artifact
         uses: actions/upload-artifact@v4
         with:
           name: 8188eu-GKI-5.15
-          path: driver/*.ko
+          path: '*.ko'
           
