@@ -1,23 +1,35 @@
+      - name: Clone RTL8188EUS driver
+        run: |
+          set -eux
+
+          git clone \
+            --depth=1 \
+            https://gitlab.com/SimplyCEO/rtl8188eus.git \
+            driver
+
+          test -f driver/Makefile
+
       - name: Build 8188eu module
         run: |
           set -eux
 
+          cd driver
+
+          make clean || true
+
           make \
-            -C driver \
-            KLIB_BUILD="$GITHUB_WORKSPACE/kernel" \
             KSRC="$GITHUB_WORKSPACE/kernel" \
             ARCH="$ARCH" \
             CROSS_COMPILE="$CROSS_COMPILE" \
-            LLVM=1 \
-            LLVM_IAS=1 \
             CC=clang \
             LD=ld.lld \
+            LLVM=1 \
+            LLVM_IAS=1 \
             -j"$(nproc)"
 
-          echo "Built kernel modules:"
-          find driver -type f -name "*.ko" -print
+          find . -type f -name "*.ko" -print
 
-      - name: Find module
+      - name: Package module
         run: |
           set -eux
 
@@ -29,14 +41,17 @@
           )"
 
           if [ -z "$MODULE" ]; then
-            echo "No kernel module was produced."
-            find driver -maxdepth 3 -type f | sort
+            echo "Build completed but no .ko file exists."
             exit 1
           fi
 
           mkdir -p output
-
-          echo "Found module: $MODULE"
           cp "$MODULE" output/8188eu.ko
-
           file output/8188eu.ko
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rtl8188eus-ko
+          path: output/8188eu.ko
+          if-no-files-found: error
