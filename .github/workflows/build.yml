@@ -2,22 +2,11 @@ name: Build 8188eu for Moto G77
 
 on:
   workflow_dispatch:
-    inputs:
-      kernel_repo:
-        description: "Moto G77 kernel source repository URL"
-        required: true
-        type: string
 
-      kernel_ref:
-        description: "Moto G77 kernel branch or tag"
-        required: true
-        type: string
-
-      kernel_defconfig:
-        description: "Kernel defconfig name"
-        required: true
-        default: "gki_defconfig"
-        type: string
+env:
+  KERNEL_REPO: https://github.com/MotorolaMobilityLLC/kernel-mtk.git
+  KERNEL_REF: main
+  KERNEL_DEFCONFIG: gki_defconfig
 
 jobs:
   build:
@@ -27,9 +16,10 @@ jobs:
       - name: Checkout RTL8188EUS driver
         uses: actions/checkout@v5
 
-      - name: Install dependencies
+      - name: Install build dependencies
         run: |
           sudo apt-get update
+
           sudo apt-get install -y \
             bc \
             bison \
@@ -48,9 +38,6 @@ jobs:
             zip
 
       - name: Clone Moto G77 kernel
-        env:
-          KERNEL_REPO: ${{ inputs.kernel_repo }}
-          KERNEL_REF: ${{ inputs.kernel_ref }}
         run: |
           set -eux
 
@@ -63,8 +50,6 @@ jobs:
           test -f kernel/Makefile
 
       - name: Configure kernel
-        env:
-          DEFCONFIG: ${{ inputs.kernel_defconfig }}
         run: |
           set -eux
 
@@ -74,12 +59,9 @@ jobs:
             ARCH=arm64 \
             LLVM=1 \
             LLVM_IAS=1 \
-            "$DEFCONFIG"
+            "$KERNEL_DEFCONFIG"
 
-          if [ ! -x scripts/config ]; then
-            echo "scripts/config is missing"
-            exit 1
-          fi
+          test -x scripts/config
 
           ./scripts/config --enable CONFIG_WLAN
           ./scripts/config --enable CONFIG_CFG80211
@@ -87,8 +69,10 @@ jobs:
           ./scripts/config --enable CONFIG_USB
 
           if grep -q "CONFIG_WLAN_VENDOR_REALTEK" \
-            arch/arm64/configs/* 2>/dev/null || \
-             grep -q "CONFIG_WLAN_VENDOR_REALTEK" .config; then
+            Kconfig \
+            drivers/net/wireless/Kconfig \
+            drivers/net/wireless/realtek/Kconfig \
+            2>/dev/null; then
             ./scripts/config --enable CONFIG_WLAN_VENDOR_REALTEK
           fi
 
@@ -117,15 +101,20 @@ jobs:
             LLVM_IAS=1 \
             modules_prepare
 
-      - name: Build RTL8188EUS module
+      - name: Build RTL8188EUS driver
         run: |
           set -eux
 
           KERNEL_DIR="$GITHUB_WORKSPACE/kernel"
-          KERNEL_RELEASE="$(make -s -C "$KERNEL_DIR" \
-            ARCH=arm64 \
-            LLVM=1 \
-            kernelrelease)"
+
+          KERNEL_RELEASE="$(
+            make \
+              -s \
+              -C "$KERNEL_DIR" \
+              ARCH=arm64 \
+              LLVM=1 \
+              kernelrelease
+          )"
 
           echo "Kernel release: $KERNEL_RELEASE"
 
@@ -136,67 +125,121 @@ jobs:
             KVER="$KERNEL_RELEASE" \
             -j"$(nproc)"
 
-      - name: Find module
+      - name: Find compiled module
         run: |
           set -eux
 
-          find . -type f -name "*.ko" -print
+          find . \
+            -type f \
+            -name "*.ko" \
+            -print
 
-          MODULE="$(find . -type f \
-            \( -name "8188eu.ko" -o -name "r8188eu.ko" \) \
-            | head -n 1)"
+          MODULE="$(
+            find . \
+              -type f \
+              \( \
+                -name "8188eu.ko" \
+                -o \
+                -name "r8188eu.ko" \
+              \) \
+              | head -n 1
+          )"
 
           if [ -z "$MODULE" ]; then
-            echo "No 8188eu kernel module was produced"
+            echo "ERROR: No 8188eu kernel module was produced."
             exit 1
           fi
 
           mkdir -p output
+
           cp "$MODULE" output/8188eu.ko
 
-          echo "Module information:"
+          echo "Built module:"
           file output/8188eu.ko
-          readelf -h output/8188eu.ko | grep -E "Class|Machine"
 
-      - name: Copy firmware
+          echo "Module architecture:"
+          readelf -h output/8188eu.ko | \
+            grep -E "Class|Machine"
+
+      - name: Copy RTL8188EUS firmware
         run: |
           set -eux
 
           mkdir -p output/firmware
 
-          find . -type f \
-            \( -name "rtl8188eufw.bin" \
-            -o -name "rtl8188eufw.bin" \
-            -o -name "rtl8188eufw_TMSC.bin" \) \
-            -exec cp {} output/firmware/ \; || true
+          find . \
+            -type f \
+            \( \
+              -iname "rtl8188eufw.bin" \
+              -o \
+              -iname "rtl8188eufw_*.bin" \
+              -o \
+              -iname "rtl8188eufw*.bin" \
+            \) \
+            -exec cp {} output/firmware/ \; \
+            || true
 
-      - name: Create README
+      - name: Create installation files
         run: |
+          set -eux
+
+          cat > output/load-driver.sh <<'EOF'
+          #!/system/bin/sh
+
+          MODDIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+          MODULE="$MODDIR/8188eu.ko"
+
+          if [ ! -f "$MODULE" ]; then
+            echo "8188eu.ko not found"
+            exit 1
+          fi
+
+          insmod "$MODULE"
+          sleep 2
+          ip link
+          EOF
+
+          chmod +x output/load-driver.sh
+
           cat > output/README.txt <<'EOF'
           RTL8188EUS Android driver
 
-          Target:
-          - TP-Link TL-WN722N v3
-          - ARM64
-          - Moto G77 kernel
+          Target adapter:
+          TP-Link TL-WN722N v3
 
-          Do not load this module unless its kernel release,
-          vermagic, exported symbols, and configuration match
-          the running phone kernel.
+          Target architecture:
+          arm64
+
+          Important:
+          This module must match the running Android kernel's release,
+          vermagic, exported symbols, and configuration.
+
+          Do not load this module on a different kernel.
+
+          The firmware files belong in:
+          /system/etc/firmware/rtlwifi/
+
+          The kernel module is:
+          8188eu.ko
           EOF
 
-      - name: Create ZIP
+      - name: Create ZIP archive
         run: |
           set -eux
-          cd output
-          zip -r ../rtl8188eus-moto-g77.zip .
 
-      - name: Upload artifacts
+          cd output
+
+          zip -r \
+            ../rtl8188eus-moto-g77.zip \
+            .
+
+      - name: Upload compiled driver
         uses: actions/upload-artifact@v4
         with:
           name: rtl8188eus-moto-g77
           path: |
             rtl8188eus-moto-g77.zip
             output/8188eu.ko
+            output/load-driver.sh
             output/README.txt
           if-no-files-found: error
