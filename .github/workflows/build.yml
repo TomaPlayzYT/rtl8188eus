@@ -51,7 +51,9 @@ jobs:
         run: |
           rm -rf out
           mkdir -p out
-          find "$PWD" -type f -name '*.ko' -exec cp -v {} out/ ;
+          while IFS= read -r -d '' f; do
+            cp -v "$f" out/
+          done < <(find "$PWD" -type f -name '*.ko' -print0)
           ls -la out
           test -n "$(find out -maxdepth 1 -name '*.ko' -print -quit)"
 
