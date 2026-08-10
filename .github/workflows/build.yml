@@ -1,175 +1,42 @@
-name: Build 8188eu.ko
-
-on:
-  workflow_dispatch:
-
-env:
-  KERNEL_REPO: https://github.com/MotorolaMobilityLLC/kernel-mtk.git
-  KERNEL_REF: android-16-release-w1wn36.18-114
-  KERNEL_DEFCONFIG: gki_defconfig
-  ARCH: arm64
-  CROSS_COMPILE: aarch64-linux-gnu-
-
-jobs:
-  build:
-    runs-on: ubuntu-22.04
-
-    steps:
-      - name: Install dependencies
-        run: |
-          set -eux
-
-          sudo apt-get update
-
-          sudo apt-get install -y \
-            bc \
-            bison \
-            build-essential \
-            clang \
-            flex \
-            gcc-aarch64-linux-gnu \
-            git \
-            libelf-dev \
-            libssl-dev \
-            lld \
-            llvm \
-            make \
-            python3 \
-            dwarves \
-            zip
-
-      - name: Clone RTL8188EUS driver
-        run: |
-          set -eux
-
-          git clone \
-            --depth=1 \
-            https://github.com/SimplyCEO/rtl8188eus.git \
-            driver
-
-          test -f driver/Makefile
-
-      - name: Clone Motorola kernel
-        run: |
-          set -eux
-
-          git clone \
-            --depth=1 \
-            --branch "$KERNEL_REF" \
-            "$KERNEL_REPO" \
-            kernel
-
-          test -f kernel/Makefile
-
-      - name: Configure kernel
-        run: |
-          set -eux
-
-          cd kernel
-
-          make \
-            ARCH="$ARCH" \
-            CROSS_COMPILE="$CROSS_COMPILE" \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            "$KERNEL_DEFCONFIG"
-
-          ./scripts/config --enable CONFIG_WLAN
-          ./scripts/config --enable CONFIG_CFG80211
-          ./scripts/config --enable CONFIG_MAC80211
-          ./scripts/config --enable CONFIG_USB
-
-          make \
-            ARCH="$ARCH" \
-            CROSS_COMPILE="$CROSS_COMPILE" \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            olddefconfig
-
-      - name: Prepare kernel
-        run: |
-          set -eux
-
-          make \
-            -C kernel \
-            ARCH="$ARCH" \
-            CROSS_COMPILE="$CROSS_COMPILE" \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            modules_prepare
-
-      - name: Read kernel release
-        run: |
-          set -eux
-
-          KERNEL_RELEASE="$(
-            make \
-              -s \
-              -C kernel \
-              ARCH="$ARCH" \
-              CROSS_COMPILE="$CROSS_COMPILE" \
-              LLVM=1 \
-              LLVM_IAS=1 \
-              kernelrelease
-          )"
-
-          echo "KERNEL_RELEASE=$KERNEL_RELEASE" >> "$GITHUB_ENV"
-
-          echo "Kernel release: $KERNEL_RELEASE"
-
       - name: Build 8188eu module
         run: |
           set -eux
 
           make \
-            -C kernel \
-            M="$GITHUB_WORKSPACE/driver" \
+            -C driver \
+            KLIB_BUILD="$GITHUB_WORKSPACE/kernel" \
+            KSRC="$GITHUB_WORKSPACE/kernel" \
             ARCH="$ARCH" \
             CROSS_COMPILE="$CROSS_COMPILE" \
             LLVM=1 \
             LLVM_IAS=1 \
             CC=clang \
             LD=ld.lld \
-            modules \
             -j"$(nproc)"
+
+          echo "Built kernel modules:"
+          find driver -type f -name "*.ko" -print
 
       - name: Find module
         run: |
           set -eux
 
-          find driver -type f -name "*.ko" -print
-
           MODULE="$(
             find driver \
               -type f \
-              -name "8188eu.ko" \
+              -name "*.ko" \
               | head -n 1
           )"
 
           if [ -z "$MODULE" ]; then
-            echo "8188eu.ko was not produced."
+            echo "No kernel module was produced."
+            find driver -maxdepth 3 -type f | sort
             exit 1
           fi
 
           mkdir -p output
+
+          echo "Found module: $MODULE"
           cp "$MODULE" output/8188eu.ko
 
           file output/8188eu.ko
-
-      - name: Write build information
-        run: |
-          set -eux
-
-          cat > output/README.txt <<EOF
-          Module: 8188eu.ko
-          Kernel release: $KERNEL_RELEASE
-          Kernel branch: $KERNEL_REF
-          Driver source: SimplyCEO/rtl8188eus
-          EOF
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: rtl8188eus-ko
-          path: output
-          if-no-files-found: error
