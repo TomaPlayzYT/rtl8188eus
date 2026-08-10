@@ -35,10 +35,9 @@ jobs:
 
       - name: Compile 8188eu.ko Module (GKI 5.15, arm64)
         run: |
-          export KDIR=$(pwd)/kernel
-          make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- KDIR=$KDIR
+          cd $(pwd)
+          make -C $(pwd)/kernel M=$(pwd) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC=clang LD=ld.lld modules
           echo "========== Build Complete =========="
-          echo "Searching for .ko files:"
           find $(pwd) -name "*.ko" -type f
 
       - name: Upload 8188eu.ko Artifact
