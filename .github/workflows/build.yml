@@ -1,4 +1,4 @@
-name: Build Android GKI 5.15 Module
+name: Build 8188eu GKI 5.15
 
 on:
   workflow_dispatch:
@@ -11,25 +11,30 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Build Dependencies
+      - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev gcc-aarch64-linux-gnu
 
-      - name: Fetch Android 13-5.15 GKI Kernel Source
+      - name: Clone Kernel Source
         run: |
-          git clone --depth 1 https://android.googlesource.com/kernel/common -b android13-5.15 kernel-common
-          cd kernel-common
+          git clone --depth 1 https://android.googlesource.com/kernel/common -b android13-5.15 kernel
+          cd kernel
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare
-          cd ..
 
-      - name: Compile 8188eu.ko
+      - name: Configure Makefile for ARM64
         run: |
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -C kernel-common M=$(pwd) modules
+          sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/g' Makefile
+          sed -i 's/CONFIG_PLATFORM_ARM64_RPI = n/CONFIG_PLATFORM_ARM64_RPI = y/g' Makefile
+
+      - name: Compile Driver
+        run: |
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KSRC=$PWD/kernel
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: 8188eu-GKI-5.15
+          name: 8188eu-ko
           path: '*.ko'
+          if-no-files-found: error
