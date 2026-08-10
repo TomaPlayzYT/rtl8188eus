@@ -7,6 +7,8 @@ env:
   KERNEL_REPO: https://github.com/MotorolaMobilityLLC/kernel-mtk.git
   KERNEL_REF: android-13-release-t1tn33.14-90-9
   KERNEL_DEFCONFIG: gki_defconfig
+  ARCH: arm64
+  CROSS_COMPILE: aarch64-linux-gnu-
 
 jobs:
   build:
@@ -19,7 +21,9 @@ jobs:
       - name: Install build dependencies
         run: |
           set -eux
+
           sudo apt-get update
+
           sudo apt-get install -y \
             bc \
             bison \
@@ -40,37 +44,45 @@ jobs:
       - name: Clone Moto G77 kernel
         run: |
           set -eux
+
           git clone \
             --depth=1 \
             --branch "$KERNEL_REF" \
             "$KERNEL_REPO" \
             kernel
+
           test -f kernel/Makefile
 
       - name: Check kernel defconfig
         run: |
           set -eux
+
           cd kernel
 
           if [ ! -f "arch/arm64/configs/$KERNEL_DEFCONFIG" ]; then
             echo "Defconfig not found:"
             echo "arch/arm64/configs/$KERNEL_DEFCONFIG"
+            echo
             echo "Available candidates:"
+
             find arch/arm64/configs \
               -maxdepth 1 \
               -type f \
               | grep -Ei "gki|mtk|6835|t1tn|defconfig" \
               || true
+
             exit 1
           fi
 
       - name: Configure kernel
         run: |
           set -eux
+
           cd kernel
 
           make \
-            ARCH=arm64 \
+            ARCH="$ARCH" \
+            CROSS_COMPILE="$CROSS_COMPILE" \
             LLVM=1 \
             LLVM_IAS=1 \
             "$KERNEL_DEFCONFIG"
@@ -83,12 +95,14 @@ jobs:
           ./scripts/config --enable CONFIG_USB
 
           make \
-            ARCH=arm64 \
+            ARCH="$ARCH" \
+            CROSS_COMPILE="$CROSS_COMPILE" \
             LLVM=1 \
             LLVM_IAS=1 \
             olddefconfig
 
-          echo "Wireless configuration:"
+          echo "Kernel wireless configuration:"
+
           grep -E \
             "CONFIG_(WLAN|CFG80211|MAC80211|WLAN_VENDOR_REALTEK)" \
             .config \
@@ -104,7 +118,8 @@ jobs:
 
           make \
             -C kernel \
-            ARCH=arm64 \
+            ARCH="$ARCH" \
+            CROSS_COMPILE="$CROSS_COMPILE" \
             LLVM=1 \
             LLVM_IAS=1 \
             modules_prepare
@@ -119,16 +134,18 @@ jobs:
             make \
               -s \
               -C "$KERNEL_DIR" \
-              ARCH=arm64 \
+              ARCH="$ARCH" \
+              CROSS_COMPILE="$CROSS_COMPILE" \
               LLVM=1 \
               kernelrelease
           )"
 
-          echo "Kernel release: $KERNEL_RELEASE"
+          echo "Kernel release:"
+          echo "$KERNEL_RELEASE"
 
           make \
-            ARCH=arm64 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
+            ARCH="$ARCH" \
+            CROSS_COMPILE="$CROSS_COMPILE" \
             KSRC="$KERNEL_DIR" \
             KVER="$KERNEL_RELEASE" \
             -j"$(nproc)"
@@ -137,7 +154,10 @@ jobs:
         run: |
           set -eux
 
-          find . -type f -name "*.ko" -print
+          find . \
+            -type f \
+            -name "*.ko" \
+            -print
 
           MODULE="$(
             find . \
@@ -156,13 +176,15 @@ jobs:
           fi
 
           mkdir -p output
+
           cp "$MODULE" output/8188eu.ko
 
           file output/8188eu.ko
+
           readelf -h output/8188eu.ko \
             | grep -E "Class|Machine"
 
-      - name: Copy firmware
+      - name: Copy RTL8188EUS firmware
         run: |
           set -eux
 
@@ -206,14 +228,9 @@ jobs:
           printf '%s\n' \
             'RTL8188EUS Android driver' \
             '' \
-            'Target adapter:' \
-            'TP-Link TL-WN722N v3' \
-            '' \
-            'Target architecture:' \
-            'arm64' \
-            '' \
-            'Target kernel branch:' \
-            'android-13-release-t1tn33.14-90-9' \
+            'Target adapter: TP-Link TL-WN722N v3' \
+            'Target architecture: arm64' \
+            'Target kernel branch: android-13-release-t1tn33.14-90-9' \
             '' \
             'The module must match the running phone kernel.' \
             'Do not load it on a different kernel.' \
@@ -225,8 +242,12 @@ jobs:
       - name: Create ZIP archive
         run: |
           set -eux
+
           cd output
-          zip -r ../rtl8188eus-moto-g77.zip .
+
+          zip -r \
+            ../rtl8188eus-moto-g77.zip \
+            .
 
       - name: Upload compiled driver
         uses: actions/upload-artifact@v4
