@@ -1,4 +1,4 @@
-name: Build RTL8188EUS Android driver
+name: Build 8188eu for Moto G77
 
 on:
   workflow_dispatch:
@@ -13,15 +13,21 @@ on:
         required: true
         type: string
 
+      kernel_defconfig:
+        description: "Kernel defconfig name"
+        required: true
+        default: "gki_defconfig"
+        type: string
+
 jobs:
   build:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout rtl8188eus
-        uses: actions/checkout@v4
+      - name: Checkout RTL8188EUS driver
+        uses: actions/checkout@v5
 
-      - name: Install build dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -38,50 +44,31 @@ jobs:
             llvm \
             make \
             python3 \
-            dwarves
+            dwarves \
+            zip
 
       - name: Clone Moto G77 kernel
         env:
           KERNEL_REPO: ${{ inputs.kernel_repo }}
           KERNEL_REF: ${{ inputs.kernel_ref }}
         run: |
-          git clone --depth=1 \
+          set -eux
+
+          git clone \
+            --depth=1 \
             --branch "$KERNEL_REF" \
             "$KERNEL_REPO" \
             kernel
 
-      - name: Validate kernel source
+          test -f kernel/Makefile
+
+      - name: Configure kernel
+        env:
+          DEFCONFIG: ${{ inputs.kernel_defconfig }}
         run: |
-          set -e
-
-          test -f kernel/Makefile || {
-            echo "Kernel Makefile not found."
-            exit 1
-          }
-
-          test -f kernel/arch/arm64/configs/* || {
-            echo "No ARM64 kernel configuration was found."
-            exit 1
-          }
-
-      - name: Select kernel configuration
-        run: |
-          set -e
+          set -eux
 
           cd kernel
-
-          CONFIG=$(find arch/arm64/configs -maxdepth 1 -type f \
-            \( -iname '*defconfig*' -o -iname '*gki*' \) \
-            | head -n 1)
-
-          if [ -z "$CONFIG" ]; then
-            echo "No suitable defconfig found."
-            echo "Select the Moto G77 defconfig manually in this workflow."
-            exit 1
-          fi
-
-          DEFCONFIG=$(basename "$CONFIG")
-          echo "Using defconfig: $DEFCONFIG"
 
           make \
             ARCH=arm64 \
@@ -89,14 +76,8 @@ jobs:
             LLVM_IAS=1 \
             "$DEFCONFIG"
 
-      - name: Enable required wireless framework
-        run: |
-          set -e
-
-          cd kernel
-
           if [ ! -x scripts/config ]; then
-            echo "scripts/config is unavailable."
+            echo "scripts/config is missing"
             exit 1
           fi
 
@@ -104,7 +85,12 @@ jobs:
           ./scripts/config --enable CONFIG_CFG80211
           ./scripts/config --enable CONFIG_MAC80211
           ./scripts/config --enable CONFIG_USB
-          ./scripts/config --enable CONFIG_WLAN_VENDOR_REALTEK
+
+          if grep -q "CONFIG_WLAN_VENDOR_REALTEK" \
+            arch/arm64/configs/* 2>/dev/null || \
+             grep -q "CONFIG_WLAN_VENDOR_REALTEK" .config; then
+            ./scripts/config --enable CONFIG_WLAN_VENDOR_REALTEK
+          fi
 
           make \
             ARCH=arm64 \
@@ -112,24 +98,17 @@ jobs:
             LLVM_IAS=1 \
             olddefconfig
 
-          echo "=== Wireless configuration ==="
+          echo "Kernel wireless configuration:"
           grep -E \
-            'CONFIG_(WLAN|CFG80211|MAC80211|WLAN_VENDOR_REALTEK)' \
+            "CONFIG_(WLAN|CFG80211|MAC80211|WLAN_VENDOR_REALTEK)" \
             .config || true
 
-          grep -q '^CONFIG_CFG80211=y' .config || {
-            echo "CONFIG_CFG80211 is not enabled."
-            exit 1
-          }
+          grep -q "^CONFIG_CFG80211=y" .config
+          grep -q "^CONFIG_MAC80211=y" .config
 
-          grep -q '^CONFIG_MAC80211=y' .config || {
-            echo "CONFIG_MAC80211 is not enabled."
-            exit 1
-          }
-
-      - name: Prepare kernel tree
+      - name: Prepare kernel
         run: |
-          set -e
+          set -eux
 
           make \
             -C kernel \
@@ -138,15 +117,15 @@ jobs:
             LLVM_IAS=1 \
             modules_prepare
 
-      - name: Build RTL8188EUS driver
+      - name: Build RTL8188EUS module
         run: |
-          set -e
+          set -eux
 
           KERNEL_DIR="$GITHUB_WORKSPACE/kernel"
-          KERNEL_RELEASE=$(make -s -C "$KERNEL_DIR" \
+          KERNEL_RELEASE="$(make -s -C "$KERNEL_DIR" \
             ARCH=arm64 \
             LLVM=1 \
-            kernelrelease)
+            kernelrelease)"
 
           echo "Kernel release: $KERNEL_RELEASE"
 
@@ -157,56 +136,67 @@ jobs:
             KVER="$KERNEL_RELEASE" \
             -j"$(nproc)"
 
-      - name: Locate built module
+      - name: Find module
         run: |
-          set -e
+          set -eux
 
-          find . -type f -name '*.ko' -print
+          find . -type f -name "*.ko" -print
 
-          MODULE=$(find . -type f \
-            \( -name '8188eu.ko' -o -name 'r8188eu.ko' \) \
-            | head -n 1)
+          MODULE="$(find . -type f \
+            \( -name "8188eu.ko" -o -name "r8188eu.ko" \) \
+            | head -n 1)"
 
           if [ -z "$MODULE" ]; then
-            echo "No RTL8188EUS kernel module was built."
+            echo "No 8188eu kernel module was produced"
             exit 1
           fi
 
           mkdir -p output
           cp "$MODULE" output/8188eu.ko
 
-          echo "Built module:"
+          echo "Module information:"
           file output/8188eu.ko
+          readelf -h output/8188eu.ko | grep -E "Class|Machine"
 
-          echo "Module architecture:"
-          readelf -h output/8188eu.ko | \
-            grep -E 'Class|Machine'
-
-      - name: Package module
+      - name: Copy firmware
         run: |
-          set -e
+          set -eux
 
-          mkdir -p output/system/etc/firmware/rtlwifi
-
-          cp -r \
-            /dev/null \
-            output/ignore 2>/dev/null || true
+          mkdir -p output/firmware
 
           find . -type f \
-            -path '*firmware*' \
-            -name 'rtl8188*' \
-            -exec cp {} output/system/etc/firmware/rtlwifi/ \; \
-            || true
+            \( -name "rtl8188eufw.bin" \
+            -o -name "rtl8188eufw.bin" \
+            -o -name "rtl8188eufw_TMSC.bin" \) \
+            -exec cp {} output/firmware/ \; || true
 
-          printf '%s\n' \
-            'RTL8188EUS Android kernel module' \
-            'Target: Moto G77 arm64' \
-            'Do not load unless kernel release and vermagic match.' \
-            > output/README.txt
+      - name: Create README
+        run: |
+          cat > output/README.txt <<'EOF'
+          RTL8188EUS Android driver
 
-      - name: Upload driver artifact
+          Target:
+          - TP-Link TL-WN722N v3
+          - ARM64
+          - Moto G77 kernel
+
+          Do not load this module unless its kernel release,
+          vermagic, exported symbols, and configuration match
+          the running phone kernel.
+          EOF
+
+      - name: Create ZIP
+        run: |
+          set -eux
+          cd output
+          zip -r ../rtl8188eus-moto-g77.zip .
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: rtl8188eus-moto-g77
-          path: output/
+          path: |
+            rtl8188eus-moto-g77.zip
+            output/8188eu.ko
+            output/README.txt
           if-no-files-found: error
