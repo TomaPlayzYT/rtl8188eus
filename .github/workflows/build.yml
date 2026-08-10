@@ -1,65 +1,58 @@
+
 name: Build Android GKI 5.15 Module
 
 on:
   workflow_dispatch:
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout Driver Source
-        uses: actions/checkout@v6
+      - name: Checkout Driver Source (Modern Fork)
+        uses: actions/checkout@v4
         with:
-          repository: KanuX-14/rtl8188eus
+          repository: 'KanuX-14/rtl8188eus'
           path: driver
 
-      - name: Install dependencies
+      - name: Set up Build Dependencies & Toolchains
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential bc bison flex libssl-dev libelf-dev \
-            clang lld llvm gcc-aarch64-linux-gnu git
+            build-essential \
+            bc \
+            bison \
+            flex \
+            libssl-dev \
+            libelf-dev \
+            clang \
+            lld \
+            llvm \
+            gcc-aarch64-linux-gnu
 
-      - name: Fetch Android GKI 5.15 kernel
+      - name: Fetch Android 13-5.15 GKI Kernel & Prepare Headers
         run: |
-          git clone --depth 1 -b android13-5.15 \
-            https://android.googlesource.com/kernel/common kernel
+          git clone --depth 1 https://android.googlesource.com/kernel/common -b android13-5.15 kernel
           cd kernel
-          make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
-          make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- prepare modules_prepare
+          make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig prepare modules_prepare
+          cd ..
 
-      - name: Patch driver for clang build
+      - name: Patch Driver Sources for Clean Build
         run: |
-          test -f driver/include/rtw_recv.h
-          test -f driver/core/rtw_security.c
-
+          # Fix uninitialized variable warnings in rtw_recv.h
           sed -i 's/_buffer *buf_desc;/_buffer *buf_desc = NULL;/' driver/include/rtw_recv.h
           sed -i 's/u8 *buf_star;/u8 *buf_star = NULL;/' driver/include/rtw_recv.h
+
+          # Fix Clang strict parenthetical equality warnings in rtw_security.c
           sed -i 's/if ((pattrib->encrypt == _AES_))/if (pattrib->encrypt == _AES_)/g' driver/core/rtw_security.c
           sed -i 's/if ((prxattrib->encrypt == _AES_))/if (prxattrib->encrypt == _AES_)/g' driver/core/rtw_security.c
 
-      - name: Build module
+      - name: Compile 8188eu.ko Module (GKI 5.15, arm64)
         run: |
-          make -C "$PWD/kernel" M="$PWD/driver" \
-            ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- modules
+          make -C $(pwd)/kernel M=$(pwd)/driver ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- modules
 
-      - name: Collect module
-        run: |
-          rm -rf out
-          mkdir -p out
-          while IFS= read -r -d '' f; do
-            cp -v "$f" out/
-          done < <(find "$PWD" -type f -name '*.ko' -print0)
-          ls -la out
-          test -n "$(find out -maxdepth 1 -name '*.ko' -print -quit)"
-
-      - name: Upload module
-        uses: actions/upload-artifact@v5
+      - name: Upload 8188eu.ko Artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: 8188eu-gki-5.15
-          path: out/*.ko
-          if-no-files-found: error
+          name: 8188eu-GKI-5.15
+          path: driver/*.ko
