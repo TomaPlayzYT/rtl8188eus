@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout Driver
         uses: actions/checkout@v4
 
       - name: Install Dependencies
@@ -24,7 +24,7 @@ jobs:
             gcc-aarch64-linux-gnu \
             dwarves
 
-      - name: Clone Android 13 5.15 Kernel
+      - name: Clone Android 13 Kernel 5.15
         run: |
           git clone --depth=1 \
             https://android.googlesource.com/kernel/common \
@@ -43,97 +43,230 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu- \
             modules_prepare
 
-      - name: Configure Driver
-        run: |
-          sed -i \
-            's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/g' \
-            Makefile
-
-          sed -i \
-            's/CONFIG_PLATFORM_ARM64_RPI = n/CONFIG_PLATFORM_ARM64_RPI = y/g' \
-            Makefile
-
-      - name: Patch rtl8188eus for Kernel 5.15
+      - name: Patch rtl8188eus for Android 5.15
         shell: bash
         run: |
           set -e
 
           FILE="os_dep/linux/ioctl_cfg80211.c"
 
-          echo "Patching cfg80211 compatibility..."
-
-          # ---------------------------------------------------------
-          # cfg80211_ch_switch_notify()
-          #
-          # Linux 5.15 expects:
-          # cfg80211_ch_switch_notify(dev, chandef, link_id)
-          # ---------------------------------------------------------
-
-          python3 - <<'PY'
+          python3 <<'PY'
           from pathlib import Path
 
           p = Path("os_dep/linux/ioctl_cfg80211.c")
           s = p.read_text()
 
-          old = """#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0))
-                  cfg80211_ch_switch_notify(adapter->pnetdev, &chdef, 0);
-          #elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0))
-                  cfg80211_ch_switch_notify(adapter->pnetdev, &chdef, 0, 0);
-          #elif (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0))
-                  cfg80211_ch_switch_notify(adapter->pnetdev, &chdef, 0);
-          #else
-                  cfg80211_ch_switch_notify(adapter->pnetdev, &chdef);
-          #endif"""
+          # ==========================================================
+          # 1. cfg80211_ch_switch_notify()
+          #
+          # Android 5.15 expects:
+          #
+          # cfg80211_ch_switch_notify(dev, chandef, link_id,
+          #                            punct_bitmap)
+          # ==========================================================
 
-          new = """#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0))
-                  cfg80211_ch_switch_notify(adapter->pnetdev, &chdef, 0);
-          #elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0))
-                  cfg80211_ch_switch_notify(adapter->pnetdev, &chdef, 0, 0);
-          #elif (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0))
-                  cfg80211_ch_switch_notify(adapter->pnetdev, &chdef, 0);
-          #elif (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0))
-                  cfg80211_ch_switch_notify(adapter->pnetdev, &chdef, 0);
-          #else
-                  cfg80211_ch_switch_notify(adapter->pnetdev, &chdef);
-          #endif"""
-
-          if old in s:
-              s = s.replace(old, new)
-          else:
-              print("WARNING: channel-switch block was not found")
-
-          # Android 5.15 uses cfg80211_roam_info.links[0].bssid.
           s = s.replace(
-              "roam_info.bssid = cur_network->network.MacAddress;",
-              "roam_info.links[0].bssid = cur_network->network.MacAddress;"
+              """#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0))
+          	cfg80211_ch_switch_notify(adapter->pnetdev, &chdef, 0);
+          #else
+          	cfg80211_ch_switch_notify(adapter->pnetdev, &chdef);
+          #endif""",
+              """#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0))
+          	cfg80211_ch_switch_notify(adapter->pnetdev, &chdef, 0, 0);
+          #else
+          	cfg80211_ch_switch_notify(adapter->pnetdev, &chdef);
+          #endif"""
+          )
+
+          # ==========================================================
+          # 2. cfg80211_roam_info
+          #
+          # Android 5.15 uses links[0] for the BSSID/channel.
+          # ==========================================================
+
+          s = s.replace(
+              """#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0))
+          	roam_info.links[0].channel = notify_channel;
+          	roam_info.links[0].bssid = cur_network->network.MacAddress;
+          #else
+          	roam_info.channel = notify_channel;
+          	roam_info.bssid = cur_network->network.MacAddress;
+          #endif""",
+              """#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0))
+          	roam_info.links[0].channel = notify_channel;
+          	roam_info.links[0].bssid = cur_network->network.MacAddress;
+          #else
+          	roam_info.channel = notify_channel;
+          	roam_info.bssid = cur_network->network.MacAddress;
+          #endif"""
+          )
+
+          # ==========================================================
+          # 3. stop_ap()
+          #
+          # Android's 5.15 cfg80211_ops expects link_id.
+          # ==========================================================
+
+          s = s.replace(
+              """#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0))
+          static int cfg80211_rtw_stop_ap(struct wiphy *wiphy, struct net_device *ndev, unsigned int link_id)
+          #else
+          static int cfg80211_rtw_stop_ap(struct wiphy *wiphy, struct net_device *ndev)
+          #endif""",
+              """#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0))
+          static int cfg80211_rtw_stop_ap(struct wiphy *wiphy, struct net_device *ndev, unsigned int link_id)
+          #else
+          static int cfg80211_rtw_stop_ap(struct wiphy *wiphy, struct net_device *ndev)
+          #endif"""
+          )
+
+          # ==========================================================
+          # 4. wireless_dev.current_bss
+          #
+          # Android 5.15 uses connected.
+          # ==========================================================
+
+          s = s.replace(
+              """#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0))
+          	if (wdev->connected) {
+          #else
+          	if (wdev->current_bss) {
+          #endif""",
+              """#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0))
+          	if (wdev->connected) {
+          #else
+          	if (wdev->current_bss) {
+          #endif"""
           )
 
           p.write_text(s)
           PY
 
-          echo "Checking patched API usage..."
+          echo "=== cfg80211 compatibility verification ==="
 
           grep -n \
             -E \
-            'cfg80211_ch_switch_notify|roam_info.*bssid' \
+            'cfg80211_ch_switch_notify|roam_info\.(links|bssid|channel)|cfg80211_rtw_stop_ap|wdev->(connected|current_bss)' \
             "$FILE" || true
 
-      - name: Compile Driver
+      - name: Patch cfg80211 key callback signatures
+        shell: bash
         run: |
+          set -e
+
+          FILE="os_dep/linux/ioctl_cfg80211.c"
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          p = Path("os_dep/linux/ioctl_cfg80211.c")
+          s = p.read_text()
+
+          # Android 5.15 cfg80211_ops key callbacks include link_id.
+          #
+          # Rather than modifying the implementation logic, add the
+          # parameter to the existing function declarations and simply
+          # leave it unused.
+
+          replacements = {
+              """static int cfg80211_rtw_add_key(struct wiphy *wiphy,
+          	struct net_device *ndev, u8 key_index, bool pairwise,
+          	const u8 *mac_addr, struct key_params *params)""":
+              """static int cfg80211_rtw_add_key(struct wiphy *wiphy,
+          	struct net_device *ndev, int link_id, u8 key_index,
+          	bool pairwise, const u8 *mac_addr,
+          	struct key_params *params)""",
+
+              """static int cfg80211_rtw_get_key(struct wiphy *wiphy,
+          	struct net_device *ndev, u8 key_index, bool pairwise,
+          	const u8 *mac_addr, void *cookie,
+          	void (*callback)(void *cookie, struct key_params *))""":
+              """static int cfg80211_rtw_get_key(struct wiphy *wiphy,
+          	struct net_device *ndev, int link_id, u8 key_index,
+          	bool pairwise, const u8 *mac_addr, void *cookie,
+          	void (*callback)(void *cookie, struct key_params *))""",
+
+              """static int cfg80211_rtw_del_key(struct wiphy *wiphy,
+          	struct net_device *ndev, u8 key_index, bool pairwise,
+          	const u8 *mac_addr)""":
+              """static int cfg80211_rtw_del_key(struct wiphy *wiphy,
+          	struct net_device *ndev, int link_id, u8 key_index,
+          	bool pairwise, const u8 *mac_addr)""",
+
+              """static int cfg80211_rtw_set_default_key(struct wiphy *wiphy,
+          	struct net_device *ndev, u8 key_index,
+          	bool unicast, bool multicast)""":
+              """static int cfg80211_rtw_set_default_key(struct wiphy *wiphy,
+          	struct net_device *ndev, int link_id, u8 key_index,
+          	bool unicast, bool multicast)""",
+
+              """static int cfg80211_rtw_set_default_mgmt_key(struct wiphy *wiphy,
+          	struct net_device *ndev, u8 key_index)""":
+              """static int cfg80211_rtw_set_default_mgmt_key(struct wiphy *wiphy,
+          	struct net_device *ndev, int link_id, u8 key_index)"""
+          }
+
+          for old, new in replacements.items():
+              if old in s:
+                  s = s.replace(old, new)
+              else:
+                  print("WARNING: function signature not found:")
+                  print(old.splitlines()[0])
+
+          p.write_text(s)
+          PY
+
+      - name: Remove obsolete warning flag
+        shell: bash
+        run: |
+          grep -RIl -- \
+            '-Wno-sometimes-uninitialized' \
+            . \
+            --exclude-dir=.git \
+            --exclude='*.o' \
+            --exclude='*.ko' \
+            | while read -r file; do
+                sed -i \
+                  's/-Wno-sometimes-uninitialized//g' \
+                  "$file"
+              done
+
+      - name: Build Driver
+        shell: bash
+        run: |
+          set -e
+
           make \
             ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             KSRC="$PWD/kernel" \
             -j"$(nproc)"
 
-      - name: Locate Module
+      - name: Verify Module
+        shell: bash
         run: |
+          set -e
+
+          echo "=== Kernel modules ==="
           find . -type f -name "*.ko" -print
 
-      - name: Upload Artifact
+          MODULE="$(find . -type f -name "*.ko" | head -n 1)"
+
+          if [ -z "$MODULE" ]; then
+            echo "ERROR: No .ko file was produced."
+            exit 1
+          fi
+
+          echo "Built module:"
+          file "$MODULE"
+
+          echo "Architecture:"
+          readelf -h "$MODULE" | grep -E 'Class|Machine'
+
+      - name: Upload Driver
         uses: actions/upload-artifact@v4
         with:
-          name: 8188eu-ko
+          name: 8188eu-arm64-gki-5.15
           path: |
             **/*.ko
           if-no-files-found: error
