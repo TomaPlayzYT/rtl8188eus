@@ -3,13 +3,16 @@ name: Build Android GKI 5.15 Module
 on:
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout Driver Source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: KanuX-14/rtl8188eus
           path: driver
@@ -46,7 +49,7 @@ jobs:
           find "$PWD/driver" -name '*.ko' -o -name '*.ko.*'
 
       - name: Upload module
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: 8188eu-gki-5.15
           path: driver/**/*.ko
