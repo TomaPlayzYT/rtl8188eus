@@ -42,7 +42,9 @@ jobs:
         with:
           name: 8188eu-GKI-5.15-build
           path: |
-            .
-            !.git
-            !kernel
+            *.ko
+            *.o
+            *.mod
+            Module.symvers
+            modules.order
           if-no-files-found: warn
