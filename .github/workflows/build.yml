@@ -35,11 +35,24 @@ jobs:
 
       - name: Compile 8188eu.ko Module (GKI 5.15, arm64)
         run: |
-          make -C $(pwd)/kernel M=$(pwd) ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- modules
+          make -C $(pwd)/kernel M=$(pwd) ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- modules 2>&1 | tee build.log
+
+      - name: Find .ko file location
+        run: |
+          echo "Searching for all .ko files..."
+          find $(pwd) -name "*.ko" -type f 2>/dev/null | head -20
+          echo ""
+          echo "Current directory contents:"
+          ls -la $(pwd)
+          echo ""
+          echo "Kernel directory contents:"
+          ls -la $(pwd)/kernel 2>/dev/null | grep -E "\.ko|total" || echo "No .ko files in kernel dir"
 
       - name: Upload 8188eu.ko Artifact
         uses: actions/upload-artifact@v4
         with:
           name: 8188eu-GKI-5.15
-          path: 8188eu.ko
+          path: |
+            **/*.ko
+            build.log
           if-no-files-found: warn
