@@ -46,10 +46,18 @@ jobs:
         run: |
           make -C "$PWD/kernel" M="$PWD/driver" \
             ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- modules
-          find "$PWD/driver" -name '*.ko' -o -name '*.ko.*'
+
+      - name: Collect module
+        run: |
+          rm -rf out
+          mkdir -p out
+          find "$PWD" -type f -name '*.ko' -exec cp -v {} out/ ;
+          ls -la out
+          test -n "$(find out -maxdepth 1 -name '*.ko' -print -quit)"
 
       - name: Upload module
         uses: actions/upload-artifact@v5
         with:
           name: 8188eu-gki-5.15
-          path: driver/**/*.ko
+          path: out/*.ko
+          if-no-files-found: error
