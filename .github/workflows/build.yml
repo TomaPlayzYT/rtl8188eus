@@ -5,7 +5,7 @@ on:
 
 env:
   KERNEL_REPO: https://github.com/MotorolaMobilityLLC/kernel-mtk.git
-  KERNEL_REF: main
+  KERNEL_REF: android-13-release-t1tn33.14-90-9
   KERNEL_DEFCONFIG: gki_defconfig
 
 jobs:
@@ -18,6 +18,8 @@ jobs:
 
       - name: Install build dependencies
         run: |
+          set -eux
+
           sudo apt-get update
 
           sudo apt-get install -y \
@@ -49,6 +51,25 @@ jobs:
 
           test -f kernel/Makefile
 
+      - name: Check kernel defconfig
+        run: |
+          set -eux
+
+          cd kernel
+
+          if [ ! -f "arch/arm64/configs/$KERNEL_DEFCONFIG" ]; then
+            echo "Defconfig not found:"
+            echo "arch/arm64/configs/$KERNEL_DEFCONFIG"
+            echo
+            echo "Available likely defconfigs:"
+            find arch/arm64/configs \
+              -maxdepth 1 \
+              -type f \
+              | grep -Ei "gki|mtk|6835|t1tn|defconfig" \
+              || true
+            exit 1
+          fi
+
       - name: Configure kernel
         run: |
           set -eux
@@ -68,10 +89,9 @@ jobs:
           ./scripts/config --enable CONFIG_MAC80211
           ./scripts/config --enable CONFIG_USB
 
-          if grep -q "CONFIG_WLAN_VENDOR_REALTEK" \
-            Kconfig \
-            drivers/net/wireless/Kconfig \
-            drivers/net/wireless/realtek/Kconfig \
+          if grep -Rqs \
+            "config WLAN_VENDOR_REALTEK" \
+            drivers/net/wireless \
             2>/dev/null; then
             ./scripts/config --enable CONFIG_WLAN_VENDOR_REALTEK
           fi
@@ -85,8 +105,10 @@ jobs:
           echo "Kernel wireless configuration:"
           grep -E \
             "CONFIG_(WLAN|CFG80211|MAC80211|WLAN_VENDOR_REALTEK)" \
-            .config || true
+            .config \
+            || true
 
+          grep -q "^CONFIG_WLAN=y" .config
           grep -q "^CONFIG_CFG80211=y" .config
           grep -q "^CONFIG_MAC80211=y" .config
 
@@ -116,7 +138,8 @@ jobs:
               kernelrelease
           )"
 
-          echo "Kernel release: $KERNEL_RELEASE"
+          echo "Kernel release:"
+          echo "$KERNEL_RELEASE"
 
           make \
             ARCH=arm64 \
@@ -146,7 +169,7 @@ jobs:
           )"
 
           if [ -z "$MODULE" ]; then
-            echo "ERROR: No 8188eu kernel module was produced."
+            echo "ERROR: No RTL8188EUS module was produced."
             exit 1
           fi
 
@@ -158,8 +181,8 @@ jobs:
           file output/8188eu.ko
 
           echo "Module architecture:"
-          readelf -h output/8188eu.ko | \
-            grep -E "Class|Machine"
+          readelf -h output/8188eu.ko \
+            | grep -E "Class|Machine"
 
       - name: Copy RTL8188EUS firmware
         run: |
@@ -179,49 +202,60 @@ jobs:
             -exec cp {} output/firmware/ \; \
             || true
 
-      - name: Create installation files
+      - name: Create driver loader
         run: |
           set -eux
 
           cat > output/load-driver.sh <<'EOF'
-          #!/system/bin/sh
+#!/system/bin/sh
 
-          MODDIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-          MODULE="$MODDIR/8188eu.ko"
+MODDIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+MODULE="$MODDIR/8188eu.ko"
 
-          if [ ! -f "$MODULE" ]; then
-            echo "8188eu.ko not found"
-            exit 1
-          fi
+if [ ! -f "$MODULE" ]; then
+    echo "8188eu.ko not found"
+    exit 1
+fi
 
-          insmod "$MODULE"
-          sleep 2
-          ip link
-          EOF
+insmod "$MODULE"
+
+sleep 2
+
+ip link
+EOF
 
           chmod +x output/load-driver.sh
 
+      - name: Create README
+        run: |
+          set -eux
+
           cat > output/README.txt <<'EOF'
-          RTL8188EUS Android driver
+RTL8188EUS Android driver
 
-          Target adapter:
-          TP-Link TL-WN722N v3
+Target adapter:
+TP-Link TL-WN722N v3
 
-          Target architecture:
-          arm64
+Target architecture:
+arm64
 
-          Important:
-          This module must match the running Android kernel's release,
-          vermagic, exported symbols, and configuration.
+Target kernel branch:
+android-13-release-t1tn33.14-90-9
 
-          Do not load this module on a different kernel.
+The module must match the running phone kernel's:
+- kernel release
+- vermagic
+- exported symbols
+- configuration
 
-          The firmware files belong in:
-          /system/etc/firmware/rtlwifi/
+Do not load this module on a different kernel.
 
-          The kernel module is:
-          8188eu.ko
-          EOF
+Kernel module:
+8188eu.ko
+
+Firmware location:
+ /system/etc/firmware/rtlwifi/
+EOF
 
       - name: Create ZIP archive
         run: |
