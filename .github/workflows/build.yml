@@ -63,29 +63,27 @@ jobs:
             LLVM=1 \
             LLVM_IAS=1 \
             CROSS_COMPILE=aarch64-linux-gnu- \
+            CONFIG_RTL8188EU=m \
+            CONFIG_PLATFORM_I386_PC=n \
+            CONFIG_PLATFORM_ARM_AARCH64=y \
             modules
 
       - name: Prepare Artifact
         run: |
           set -eux
-          # Create an output directory to prevent file-copy collisions
           mkdir -p "$GITHUB_WORKSPACE/out"
 
-          # Ignore the kernel folder so we don't accidentally grab a random MTK module
-          MODULE="$(
-            find "$GITHUB_WORKSPACE" \
-              -path "$GITHUB_WORKSPACE/kernel" -prune -o \
-              -type f \
-              -name "8188eu.ko" \
-              -print | head -n 1
-          )"
+          # Search for any .ko file produced outside the kernel directory
+          MODULE="$(find "$GITHUB_WORKSPACE" -type f -name "*.ko" ! -path "$GITHUB_WORKSPACE/kernel/*" | head -n 1)"
 
           if [ -z "$MODULE" ]; then
-            echo "No 8188eu.ko file was produced."
+            echo "=== ERROR: No module .ko file was produced ==="
+            echo "Directory layout:"
+            ls -la "$GITHUB_WORKSPACE"
             exit 1
           fi
 
-          echo "Found: $MODULE"
+          echo "Found compiled module: $MODULE"
           cp "$MODULE" "$GITHUB_WORKSPACE/out/8188eu.ko"
 
       - name: Verify Module
