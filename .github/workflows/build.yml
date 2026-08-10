@@ -1,57 +1,90 @@
-      - name: Clone RTL8188EUS driver
+name: Build Android GKI 5.15 Module
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Build Dependencies
+        run: |
+          set -eux
+
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            build-essential \
+            bc \
+            bison \
+            flex \
+            libssl-dev \
+            libelf-dev \
+            clang \
+            lld \
+            llvm \
+            gcc-aarch64-linux-gnu \
+            git
+
+      - name: Fetch Motorola Kernel and Prepare Headers
         run: |
           set -eux
 
           git clone \
             --depth=1 \
-            https://gitlab.com/SimplyCEO/rtl8188eus.git \
-            driver
+            --branch android-16-release-w1wn36.18-114 \
+            https://github.com/MotorolaMobilityLLC/kernel-mtk.git \
+            kernel
 
-          test -f driver/Makefile
-
-      - name: Build 8188eu module
-        run: |
-          set -eux
-
-          cd driver
-
-          make clean || true
+          cd kernel
 
           make \
-            KSRC="$GITHUB_WORKSPACE/kernel" \
-            ARCH="$ARCH" \
-            CROSS_COMPILE="$CROSS_COMPILE" \
-            CC=clang \
-            LD=ld.lld \
+            ARCH=arm64 \
             LLVM=1 \
             LLVM_IAS=1 \
-            -j"$(nproc)"
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            gki_defconfig
 
-          find . -type f -name "*.ko" -print
+          make \
+            ARCH=arm64 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            prepare \
+            modules_prepare
 
-      - name: Package module
+      - name: Compile 8188eu.ko Module
         run: |
           set -eux
 
-          MODULE="$(
-            find driver \
-              -type f \
-              -name "*.ko" \
-              | head -n 1
-          )"
+          make \
+            -C "$GITHUB_WORKSPACE/kernel" \
+            M="$GITHUB_WORKSPACE" \
+            ARCH=arm64 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            modules
 
-          if [ -z "$MODULE" ]; then
-            echo "Build completed but no .ko file exists."
-            exit 1
-          fi
+          find "$GITHUB_WORKSPACE" \
+            -type f \
+            -name "*.ko" \
+            -print
 
-          mkdir -p output
-          cp "$MODULE" output/8188eu.ko
-          file output/8188eu.ko
+      - name: Verify Module
+        run: |
+          set -eux
 
-      - name: Upload artifact
+          test -f "$GITHUB_WORKSPACE/8188eu.ko"
+          file "$GITHUB_WORKSPACE/8188eu.ko"
+
+      - name: Upload 8188eu.ko Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rtl8188eus-ko
-          path: output/8188eu.ko
+          name: 8188eu-GKI-5.15
+          path: 8188eu.ko
           if-no-files-found: error
