@@ -1,4 +1,4 @@
-name: Build and upload 8188eu.ko
+name: Build 8188eu.ko
 
 on:
   workflow_dispatch:
@@ -15,10 +15,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout RTL8188EUS source
-        uses: actions/checkout@v5
-
-      - name: Install build dependencies
+      - name: Install dependencies
         run: |
           set -eux
 
@@ -41,7 +38,18 @@ jobs:
             dwarves \
             zip
 
-      - name: Clone kernel
+      - name: Clone RTL8188EUS driver
+        run: |
+          set -eux
+
+          git clone \
+            --depth=1 \
+            https://github.com/SimplyCEO/rtl8188eus.git \
+            driver
+
+          test -f driver/Makefile
+
+      - name: Clone Motorola kernel
         run: |
           set -eux
 
@@ -78,10 +86,6 @@ jobs:
             LLVM_IAS=1 \
             olddefconfig
 
-          grep -E \
-            "CONFIG_(WLAN|CFG80211|MAC80211)" \
-            .config
-
       - name: Prepare kernel
         run: |
           set -eux
@@ -94,7 +98,7 @@ jobs:
             LLVM_IAS=1 \
             modules_prepare
 
-      - name: Get kernel release
+      - name: Read kernel release
         run: |
           set -eux
 
@@ -111,46 +115,39 @@ jobs:
 
           echo "KERNEL_RELEASE=$KERNEL_RELEASE" >> "$GITHUB_ENV"
 
-          echo "Kernel release:"
-          echo "$KERNEL_RELEASE"
+          echo "Kernel release: $KERNEL_RELEASE"
 
-      - name: Build RTL8188EUS module
+      - name: Build 8188eu module
         run: |
           set -eux
 
           make \
+            -C kernel \
+            M="$GITHUB_WORKSPACE/driver" \
             ARCH="$ARCH" \
             CROSS_COMPILE="$CROSS_COMPILE" \
-            CC=clang \
-            LD=ld.lld \
             LLVM=1 \
             LLVM_IAS=1 \
-            KSRC="$GITHUB_WORKSPACE/kernel" \
-            KVER="$KERNEL_RELEASE" \
+            CC=clang \
+            LD=ld.lld \
+            modules \
             -j"$(nproc)"
 
-      - name: Locate 8188eu.ko
+      - name: Find module
         run: |
           set -eux
 
-          find . \
-            -type f \
-            -name "*.ko" \
-            -print
+          find driver -type f -name "*.ko" -print
 
           MODULE="$(
-            find . \
+            find driver \
               -type f \
-              \( \
-                -name "8188eu.ko" \
-                -o \
-                -name "r8188eu.ko" \
-              \) \
+              -name "8188eu.ko" \
               | head -n 1
           )"
 
           if [ -z "$MODULE" ]; then
-            echo "8188eu.ko was not built."
+            echo "8188eu.ko was not produced."
             exit 1
           fi
 
@@ -158,29 +155,21 @@ jobs:
           cp "$MODULE" output/8188eu.ko
 
           file output/8188eu.ko
-          readelf -h output/8188eu.ko \
-            | grep -E "Class|Machine"
 
-      - name: Create ZIP
+      - name: Write build information
         run: |
           set -eux
 
-          printf '%s\n' \
-            "RTL8188EUS driver" \
-            "Module: 8188eu.ko" \
-            "Kernel release: $KERNEL_RELEASE" \
-            "Kernel branch: $KERNEL_REF" \
-            > output/README.txt
+          cat > output/README.txt <<EOF
+          Module: 8188eu.ko
+          Kernel release: $KERNEL_RELEASE
+          Kernel branch: $KERNEL_REF
+          Driver source: SimplyCEO/rtl8188eus
+          EOF
 
-          cd output
-          zip -r ../rtl8188eus-ko.zip .
-
-      - name: Upload 8188eu.ko
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: rtl8188eus-ko
-          path: |
-            rtl8188eus-ko.zip
-            output/8188eu.ko
-            output/README.txt
+          path: output
           if-no-files-found: error
