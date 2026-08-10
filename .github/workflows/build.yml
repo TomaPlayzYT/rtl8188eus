@@ -10,16 +10,20 @@ jobs:
       - name: Checkout Driver Source
         uses: actions/checkout@v4
 
-      - name: Set up AOSP android13-5.15 Kernel Headers & Toolchain
+      - name: Set up Build Dependencies & Toolchains
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev clang lld llvm
+          sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev clang lld llvm gcc-aarch64-linux-gnu
+
+      - name: Fetch Android 13-5.15 GKI Kernel Headers
+        run: |
           git clone --depth 1 https://android.googlesource.com/kernel/common -b android13-5.15 common
-          cd common && make ARCH=arm64 gki_defconfig prepare modules_prepare
-          
+          cd common
+          make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig prepare modules_prepare
+
       - name: Compile 8188eu.ko Module
         run: |
-          make ARCH=arm64 LLVM=1 -C common M=$(pwd) modules
+          make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- -C common M=$(pwd) modules
 
       - name: Upload 8188eu.ko Artifact
         uses: actions/upload-artifact@v4
