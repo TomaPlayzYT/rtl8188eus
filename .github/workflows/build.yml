@@ -11,38 +11,25 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up Build Dependencies & Toolchains
+      - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            bc \
-            bison \
-            flex \
-            libssl-dev \
-            libelf-dev \
-            clang \
-            lld \
-            llvm \
-            gcc-aarch64-linux-gnu
+          sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev gcc-aarch64-linux-gnu
 
-      - name: Fetch Android 13-5.15 GKI Kernel & Prepare Headers
+      - name: Fetch Android 13-5.15 GKI Kernel Source
         run: |
-          git clone --depth 1 https://android.googlesource.com/kernel/common -b android13-5.15 kernel
-          cd kernel
-          make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig prepare modules_prepare
+          git clone --depth 1 https://android.googlesource.com/kernel/common -b android13-5.15 kernel-common
+          cd kernel-common
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare
           cd ..
 
-      - name: Compile 8188eu.ko Module (GKI 5.15, arm64)
+      - name: Compile 8188eu.ko
         run: |
-          cd $(pwd)
-          make -C $(pwd)/kernel M=$(pwd) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC=clang LD=ld.lld modules
-          echo "========== Build Complete =========="
-          find $(pwd) -name "*.ko" -type f
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -C kernel-common M=$(pwd) modules
 
-      - name: Upload 8188eu.ko Artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: 8188eu-GKI-5.15
-          path: ${{ github.workspace }}/*.ko
-          if-no-files-found: warn
+          path: '*.ko'
