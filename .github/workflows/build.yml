@@ -36,10 +36,12 @@ jobs:
       - name: Compile 8188eu.ko Module (GKI 5.15, arm64)
         run: |
           make -C $(pwd)/kernel M=$(pwd) ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- modules
+          # Find and copy the compiled module to root directory
+          find . -name "*.ko" -type f -exec cp {} . \;
 
       - name: Upload 8188eu.ko Artifact
         uses: actions/upload-artifact@v4
         with:
           name: 8188eu-GKI-5.15
           path: '*.ko'
-          
+          if-no-files-found: warn
