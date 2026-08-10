@@ -1,272 +1,212 @@
-name: Build 8188eu GKI 5.15
+name: Build RTL8188EUS Android driver
 
 on:
   workflow_dispatch:
+    inputs:
+      kernel_repo:
+        description: "Moto G77 kernel source repository URL"
+        required: true
+        type: string
+
+      kernel_ref:
+        description: "Moto G77 kernel branch or tag"
+        required: true
+        type: string
 
 jobs:
   build:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout Driver
+      - name: Checkout rtl8188eus
         uses: actions/checkout@v4
 
-      - name: Install Dependencies
+      - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential \
             bc \
             bison \
+            build-essential \
+            clang \
             flex \
-            libssl-dev \
-            libelf-dev \
             gcc-aarch64-linux-gnu \
+            git \
+            libelf-dev \
+            libssl-dev \
+            lld \
+            llvm \
+            make \
+            python3 \
             dwarves
 
-      - name: Clone Android 13 Kernel 5.15
+      - name: Clone Moto G77 kernel
+        env:
+          KERNEL_REPO: ${{ inputs.kernel_repo }}
+          KERNEL_REF: ${{ inputs.kernel_ref }}
         run: |
           git clone --depth=1 \
-            https://android.googlesource.com/kernel/common \
-            -b android13-5.15 \
+            --branch "$KERNEL_REF" \
+            "$KERNEL_REPO" \
             kernel
+
+      - name: Validate kernel source
+        run: |
+          set -e
+
+          test -f kernel/Makefile || {
+            echo "Kernel Makefile not found."
+            exit 1
+          }
+
+          test -f kernel/arch/arm64/configs/* || {
+            echo "No ARM64 kernel configuration was found."
+            exit 1
+          }
+
+      - name: Select kernel configuration
+        run: |
+          set -e
 
           cd kernel
 
-          make \
-            ARCH=arm64 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            gki_defconfig
+          CONFIG=$(find arch/arm64/configs -maxdepth 1 -type f \
+            \( -iname '*defconfig*' -o -iname '*gki*' \) \
+            | head -n 1)
 
-          make \
-            ARCH=arm64 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            modules_prepare
-
-      - name: Patch rtl8188eus for Android 5.15
-        shell: bash
-        run: |
-          set -e
-
-          FILE="os_dep/linux/ioctl_cfg80211.c"
-
-          python3 <<'PY'
-          from pathlib import Path
-
-          p = Path("os_dep/linux/ioctl_cfg80211.c")
-          s = p.read_text()
-
-          # ==========================================================
-          # 1. cfg80211_ch_switch_notify()
-          #
-          # Android 5.15 expects:
-          #
-          # cfg80211_ch_switch_notify(dev, chandef, link_id,
-          #                            punct_bitmap)
-          # ==========================================================
-
-          s = s.replace(
-              """#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0))
-          	cfg80211_ch_switch_notify(adapter->pnetdev, &chdef, 0);
-          #else
-          	cfg80211_ch_switch_notify(adapter->pnetdev, &chdef);
-          #endif""",
-              """#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0))
-          	cfg80211_ch_switch_notify(adapter->pnetdev, &chdef, 0, 0);
-          #else
-          	cfg80211_ch_switch_notify(adapter->pnetdev, &chdef);
-          #endif"""
-          )
-
-          # ==========================================================
-          # 2. cfg80211_roam_info
-          #
-          # Android 5.15 uses links[0] for the BSSID/channel.
-          # ==========================================================
-
-          s = s.replace(
-              """#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0))
-          	roam_info.links[0].channel = notify_channel;
-          	roam_info.links[0].bssid = cur_network->network.MacAddress;
-          #else
-          	roam_info.channel = notify_channel;
-          	roam_info.bssid = cur_network->network.MacAddress;
-          #endif""",
-              """#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0))
-          	roam_info.links[0].channel = notify_channel;
-          	roam_info.links[0].bssid = cur_network->network.MacAddress;
-          #else
-          	roam_info.channel = notify_channel;
-          	roam_info.bssid = cur_network->network.MacAddress;
-          #endif"""
-          )
-
-          # ==========================================================
-          # 3. stop_ap()
-          #
-          # Android's 5.15 cfg80211_ops expects link_id.
-          # ==========================================================
-
-          s = s.replace(
-              """#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0))
-          static int cfg80211_rtw_stop_ap(struct wiphy *wiphy, struct net_device *ndev, unsigned int link_id)
-          #else
-          static int cfg80211_rtw_stop_ap(struct wiphy *wiphy, struct net_device *ndev)
-          #endif""",
-              """#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0))
-          static int cfg80211_rtw_stop_ap(struct wiphy *wiphy, struct net_device *ndev, unsigned int link_id)
-          #else
-          static int cfg80211_rtw_stop_ap(struct wiphy *wiphy, struct net_device *ndev)
-          #endif"""
-          )
-
-          # ==========================================================
-          # 4. wireless_dev.current_bss
-          #
-          # Android 5.15 uses connected.
-          # ==========================================================
-
-          s = s.replace(
-              """#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0))
-          	if (wdev->connected) {
-          #else
-          	if (wdev->current_bss) {
-          #endif""",
-              """#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0))
-          	if (wdev->connected) {
-          #else
-          	if (wdev->current_bss) {
-          #endif"""
-          )
-
-          p.write_text(s)
-          PY
-
-          echo "=== cfg80211 compatibility verification ==="
-
-          grep -n \
-            -E \
-            'cfg80211_ch_switch_notify|roam_info\.(links|bssid|channel)|cfg80211_rtw_stop_ap|wdev->(connected|current_bss)' \
-            "$FILE" || true
-
-      - name: Patch cfg80211 key callback signatures
-        shell: bash
-        run: |
-          set -e
-
-          FILE="os_dep/linux/ioctl_cfg80211.c"
-
-          python3 <<'PY'
-          from pathlib import Path
-
-          p = Path("os_dep/linux/ioctl_cfg80211.c")
-          s = p.read_text()
-
-          # Android 5.15 cfg80211_ops key callbacks include link_id.
-          #
-          # Rather than modifying the implementation logic, add the
-          # parameter to the existing function declarations and simply
-          # leave it unused.
-
-          replacements = {
-              """static int cfg80211_rtw_add_key(struct wiphy *wiphy,
-          	struct net_device *ndev, u8 key_index, bool pairwise,
-          	const u8 *mac_addr, struct key_params *params)""":
-              """static int cfg80211_rtw_add_key(struct wiphy *wiphy,
-          	struct net_device *ndev, int link_id, u8 key_index,
-          	bool pairwise, const u8 *mac_addr,
-          	struct key_params *params)""",
-
-              """static int cfg80211_rtw_get_key(struct wiphy *wiphy,
-          	struct net_device *ndev, u8 key_index, bool pairwise,
-          	const u8 *mac_addr, void *cookie,
-          	void (*callback)(void *cookie, struct key_params *))""":
-              """static int cfg80211_rtw_get_key(struct wiphy *wiphy,
-          	struct net_device *ndev, int link_id, u8 key_index,
-          	bool pairwise, const u8 *mac_addr, void *cookie,
-          	void (*callback)(void *cookie, struct key_params *))""",
-
-              """static int cfg80211_rtw_del_key(struct wiphy *wiphy,
-          	struct net_device *ndev, u8 key_index, bool pairwise,
-          	const u8 *mac_addr)""":
-              """static int cfg80211_rtw_del_key(struct wiphy *wiphy,
-          	struct net_device *ndev, int link_id, u8 key_index,
-          	bool pairwise, const u8 *mac_addr)""",
-
-              """static int cfg80211_rtw_set_default_key(struct wiphy *wiphy,
-          	struct net_device *ndev, u8 key_index,
-          	bool unicast, bool multicast)""":
-              """static int cfg80211_rtw_set_default_key(struct wiphy *wiphy,
-          	struct net_device *ndev, int link_id, u8 key_index,
-          	bool unicast, bool multicast)""",
-
-              """static int cfg80211_rtw_set_default_mgmt_key(struct wiphy *wiphy,
-          	struct net_device *ndev, u8 key_index)""":
-              """static int cfg80211_rtw_set_default_mgmt_key(struct wiphy *wiphy,
-          	struct net_device *ndev, int link_id, u8 key_index)"""
-          }
-
-          for old, new in replacements.items():
-              if old in s:
-                  s = s.replace(old, new)
-              else:
-                  print("WARNING: function signature not found:")
-                  print(old.splitlines()[0])
-
-          p.write_text(s)
-          PY
-
-      - name: Remove obsolete warning flag
-        shell: bash
-        run: |
-          grep -RIl -- \
-            '-Wno-sometimes-uninitialized' \
-            . \
-            --exclude-dir=.git \
-            --exclude='*.o' \
-            --exclude='*.ko' \
-            | while read -r file; do
-                sed -i \
-                  's/-Wno-sometimes-uninitialized//g' \
-                  "$file"
-              done
-
-      - name: Build Driver
-        shell: bash
-        run: |
-          set -e
-
-          make \
-            ARCH=arm64 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            KSRC="$PWD/kernel" \
-            -j"$(nproc)"
-
-      - name: Verify Module
-        shell: bash
-        run: |
-          set -e
-
-          echo "=== Kernel modules ==="
-          find . -type f -name "*.ko" -print
-
-          MODULE="$(find . -type f -name "*.ko" | head -n 1)"
-
-          if [ -z "$MODULE" ]; then
-            echo "ERROR: No .ko file was produced."
+          if [ -z "$CONFIG" ]; then
+            echo "No suitable defconfig found."
+            echo "Select the Moto G77 defconfig manually in this workflow."
             exit 1
           fi
 
+          DEFCONFIG=$(basename "$CONFIG")
+          echo "Using defconfig: $DEFCONFIG"
+
+          make \
+            ARCH=arm64 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            "$DEFCONFIG"
+
+      - name: Enable required wireless framework
+        run: |
+          set -e
+
+          cd kernel
+
+          if [ ! -x scripts/config ]; then
+            echo "scripts/config is unavailable."
+            exit 1
+          fi
+
+          ./scripts/config --enable CONFIG_WLAN
+          ./scripts/config --enable CONFIG_CFG80211
+          ./scripts/config --enable CONFIG_MAC80211
+          ./scripts/config --enable CONFIG_USB
+          ./scripts/config --enable CONFIG_WLAN_VENDOR_REALTEK
+
+          make \
+            ARCH=arm64 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            olddefconfig
+
+          echo "=== Wireless configuration ==="
+          grep -E \
+            'CONFIG_(WLAN|CFG80211|MAC80211|WLAN_VENDOR_REALTEK)' \
+            .config || true
+
+          grep -q '^CONFIG_CFG80211=y' .config || {
+            echo "CONFIG_CFG80211 is not enabled."
+            exit 1
+          }
+
+          grep -q '^CONFIG_MAC80211=y' .config || {
+            echo "CONFIG_MAC80211 is not enabled."
+            exit 1
+          }
+
+      - name: Prepare kernel tree
+        run: |
+          set -e
+
+          make \
+            -C kernel \
+            ARCH=arm64 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            modules_prepare
+
+      - name: Build RTL8188EUS driver
+        run: |
+          set -e
+
+          KERNEL_DIR="$GITHUB_WORKSPACE/kernel"
+          KERNEL_RELEASE=$(make -s -C "$KERNEL_DIR" \
+            ARCH=arm64 \
+            LLVM=1 \
+            kernelrelease)
+
+          echo "Kernel release: $KERNEL_RELEASE"
+
+          make \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            KSRC="$KERNEL_DIR" \
+            KVER="$KERNEL_RELEASE" \
+            -j"$(nproc)"
+
+      - name: Locate built module
+        run: |
+          set -e
+
+          find . -type f -name '*.ko' -print
+
+          MODULE=$(find . -type f \
+            \( -name '8188eu.ko' -o -name 'r8188eu.ko' \) \
+            | head -n 1)
+
+          if [ -z "$MODULE" ]; then
+            echo "No RTL8188EUS kernel module was built."
+            exit 1
+          fi
+
+          mkdir -p output
+          cp "$MODULE" output/8188eu.ko
+
           echo "Built module:"
-          file "$MODULE"
+          file output/8188eu.ko
 
-          echo "Architecture:"
-          readelf -h "$MODULE" | grep -E 'Class|Machine'
+          echo "Module architecture:"
+          readelf -h output/8188eu.ko | \
+            grep -E 'Class|Machine'
 
-      - name: Upload Driver
+      - name: Package module
+        run: |
+          set -e
+
+          mkdir -p output/system/etc/firmware/rtlwifi
+
+          cp -r \
+            /dev/null \
+            output/ignore 2>/dev/null || true
+
+          find . -type f \
+            -path '*firmware*' \
+            -name 'rtl8188*' \
+            -exec cp {} output/system/etc/firmware/rtlwifi/ \; \
+            || true
+
+          printf '%s\n' \
+            'RTL8188EUS Android kernel module' \
+            'Target: Moto G77 arm64' \
+            'Do not load unless kernel release and vermagic match.' \
+            > output/README.txt
+
+      - name: Upload driver artifact
         uses: actions/upload-artifact@v4
         with:
-          name: 8188eu-arm64-gki-5.15
-          path: |
-            **/*.ko
+          name: rtl8188eus-moto-g77
+          path: output/
           if-no-files-found: error
