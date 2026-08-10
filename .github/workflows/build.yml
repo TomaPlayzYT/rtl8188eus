@@ -14,27 +14,126 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev gcc-aarch64-linux-gnu
+          sudo apt-get install -y \
+            build-essential \
+            bc \
+            bison \
+            flex \
+            libssl-dev \
+            libelf-dev \
+            gcc-aarch64-linux-gnu \
+            dwarves
 
-      - name: Clone Kernel Source
+      - name: Clone Android 13 5.15 Kernel
         run: |
-          git clone --depth 1 https://android.googlesource.com/kernel/common -b android13-5.15 kernel
+          git clone --depth=1 \
+            https://android.googlesource.com/kernel/common \
+            -b android13-5.15 \
+            kernel
+
           cd kernel
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare
 
-      - name: Configure Makefile for ARM64
+          make \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            gki_defconfig
+
+          make \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            modules_prepare
+
+      - name: Configure Driver
         run: |
-          sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/g' Makefile
-          sed -i 's/CONFIG_PLATFORM_ARM64_RPI = n/CONFIG_PLATFORM_ARM64_RPI = y/g' Makefile
+          sed -i \
+            's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/g' \
+            Makefile
+
+          sed -i \
+            's/CONFIG_PLATFORM_ARM64_RPI = n/CONFIG_PLATFORM_ARM64_RPI = y/g' \
+            Makefile
+
+      - name: Patch rtl8188eus for Kernel 5.15
+        shell: bash
+        run: |
+          set -e
+
+          FILE="os_dep/linux/ioctl_cfg80211.c"
+
+          echo "Patching cfg80211 compatibility..."
+
+          # ---------------------------------------------------------
+          # cfg80211_ch_switch_notify()
+          #
+          # Linux 5.15 expects:
+          # cfg80211_ch_switch_notify(dev, chandef, link_id)
+          # ---------------------------------------------------------
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("os_dep/linux/ioctl_cfg80211.c")
+          s = p.read_text()
+
+          old = """#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0))
+                  cfg80211_ch_switch_notify(adapter->pnetdev, &chdef, 0);
+          #elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0))
+                  cfg80211_ch_switch_notify(adapter->pnetdev, &chdef, 0, 0);
+          #elif (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0))
+                  cfg80211_ch_switch_notify(adapter->pnetdev, &chdef, 0);
+          #else
+                  cfg80211_ch_switch_notify(adapter->pnetdev, &chdef);
+          #endif"""
+
+          new = """#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0))
+                  cfg80211_ch_switch_notify(adapter->pnetdev, &chdef, 0);
+          #elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0))
+                  cfg80211_ch_switch_notify(adapter->pnetdev, &chdef, 0, 0);
+          #elif (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0))
+                  cfg80211_ch_switch_notify(adapter->pnetdev, &chdef, 0);
+          #elif (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0))
+                  cfg80211_ch_switch_notify(adapter->pnetdev, &chdef, 0);
+          #else
+                  cfg80211_ch_switch_notify(adapter->pnetdev, &chdef);
+          #endif"""
+
+          if old in s:
+              s = s.replace(old, new)
+          else:
+              print("WARNING: channel-switch block was not found")
+
+          # Android 5.15 uses cfg80211_roam_info.links[0].bssid.
+          s = s.replace(
+              "roam_info.bssid = cur_network->network.MacAddress;",
+              "roam_info.links[0].bssid = cur_network->network.MacAddress;"
+          )
+
+          p.write_text(s)
+          PY
+
+          echo "Checking patched API usage..."
+
+          grep -n \
+            -E \
+            'cfg80211_ch_switch_notify|roam_info.*bssid' \
+            "$FILE" || true
 
       - name: Compile Driver
         run: |
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KSRC=$PWD/kernel
+          make \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            KSRC="$PWD/kernel" \
+            -j"$(nproc)"
+
+      - name: Locate Module
+        run: |
+          find . -type f -name "*.ko" -print
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: 8188eu-ko
-          path: '*.ko'
+          path: |
+            **/*.ko
           if-no-files-found: error
