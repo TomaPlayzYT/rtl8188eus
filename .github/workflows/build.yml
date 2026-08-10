@@ -19,9 +19,7 @@ jobs:
       - name: Install build dependencies
         run: |
           set -eux
-
           sudo apt-get update
-
           sudo apt-get install -y \
             bc \
             bison \
@@ -42,40 +40,33 @@ jobs:
       - name: Clone Moto G77 kernel
         run: |
           set -eux
-
           git clone \
             --depth=1 \
             --branch "$KERNEL_REF" \
             "$KERNEL_REPO" \
             kernel
-
           test -f kernel/Makefile
 
       - name: Check kernel defconfig
         run: |
           set -eux
-
           cd kernel
 
           if [ ! -f "arch/arm64/configs/$KERNEL_DEFCONFIG" ]; then
             echo "Defconfig not found:"
             echo "arch/arm64/configs/$KERNEL_DEFCONFIG"
-            echo
-            echo "Available likely defconfigs:"
-
+            echo "Available candidates:"
             find arch/arm64/configs \
               -maxdepth 1 \
               -type f \
               | grep -Ei "gki|mtk|6835|t1tn|defconfig" \
               || true
-
             exit 1
           fi
 
       - name: Configure kernel
         run: |
           set -eux
-
           cd kernel
 
           make \
@@ -91,21 +82,13 @@ jobs:
           ./scripts/config --enable CONFIG_MAC80211
           ./scripts/config --enable CONFIG_USB
 
-          if grep -Rqs \
-            "config WLAN_VENDOR_REALTEK" \
-            drivers/net/wireless \
-            2>/dev/null; then
-            ./scripts/config --enable CONFIG_WLAN_VENDOR_REALTEK
-          fi
-
           make \
             ARCH=arm64 \
             LLVM=1 \
             LLVM_IAS=1 \
             olddefconfig
 
-          echo "Kernel wireless configuration:"
-
+          echo "Wireless configuration:"
           grep -E \
             "CONFIG_(WLAN|CFG80211|MAC80211|WLAN_VENDOR_REALTEK)" \
             .config \
@@ -141,8 +124,7 @@ jobs:
               kernelrelease
           )"
 
-          echo "Kernel release:"
-          echo "$KERNEL_RELEASE"
+          echo "Kernel release: $KERNEL_RELEASE"
 
           make \
             ARCH=arm64 \
@@ -155,10 +137,7 @@ jobs:
         run: |
           set -eux
 
-          find . \
-            -type f \
-            -name "*.ko" \
-            -print
+          find . -type f -name "*.ko" -print
 
           MODULE="$(
             find . \
@@ -177,17 +156,13 @@ jobs:
           fi
 
           mkdir -p output
-
           cp "$MODULE" output/8188eu.ko
 
-          echo "Built module:"
           file output/8188eu.ko
-
-          echo "Module architecture:"
           readelf -h output/8188eu.ko \
             | grep -E "Class|Machine"
 
-      - name: Copy RTL8188EUS firmware
+      - name: Copy firmware
         run: |
           set -eux
 
@@ -209,23 +184,18 @@ jobs:
         run: |
           set -eux
 
-          cat > output/load-driver.sh <<'EOF'
-#!/system/bin/sh
-
-MODDIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-MODULE="$MODDIR/8188eu.ko"
-
-if [ ! -f "$MODULE" ]; then
-    echo "8188eu.ko not found"
-    exit 1
-fi
-
-insmod "$MODULE"
-
-sleep 2
-
-ip link
-EOF
+          printf '%s\n' \
+            '#!/system/bin/sh' \
+            'MODDIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"' \
+            'MODULE="$MODDIR/8188eu.ko"' \
+            'if [ ! -f "$MODULE" ]; then' \
+            '    echo "8188eu.ko not found"' \
+            '    exit 1' \
+            'fi' \
+            'insmod "$MODULE"' \
+            'sleep 2' \
+            'ip link' \
+            > output/load-driver.sh
 
           chmod +x output/load-driver.sh
 
@@ -233,46 +203,30 @@ EOF
         run: |
           set -eux
 
-          cat > output/README.txt <<'EOF'
-RTL8188EUS Android driver
-
-Target adapter:
-TP-Link TL-WN722N v3
-
-Target architecture:
-arm64
-
-Target kernel repository:
-https://github.com/MotorolaMobilityLLC/kernel-mtk.git
-
-Target kernel branch:
-android-13-release-t1tn33.14-90-9
-
-The module must match the running phone kernel's:
-
-- kernel release
-- vermagic
-- exported symbols
-- configuration
-
-Do not load this module on a different kernel.
-
-Kernel module:
-8188eu.ko
-
-Firmware location:
-/system/etc/firmware/rtlwifi/
-EOF
+          printf '%s\n' \
+            'RTL8188EUS Android driver' \
+            '' \
+            'Target adapter:' \
+            'TP-Link TL-WN722N v3' \
+            '' \
+            'Target architecture:' \
+            'arm64' \
+            '' \
+            'Target kernel branch:' \
+            'android-13-release-t1tn33.14-90-9' \
+            '' \
+            'The module must match the running phone kernel.' \
+            'Do not load it on a different kernel.' \
+            '' \
+            'Kernel module: 8188eu.ko' \
+            'Firmware location: /system/etc/firmware/rtlwifi/' \
+            > output/README.txt
 
       - name: Create ZIP archive
         run: |
           set -eux
-
           cd output
-
-          zip -r \
-            ../rtl8188eus-moto-g77.zip \
-            .
+          zip -r ../rtl8188eus-moto-g77.zip .
 
       - name: Upload compiled driver
         uses: actions/upload-artifact@v4
