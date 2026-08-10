@@ -14,9 +14,7 @@ jobs:
       - name: Set up Build Dependencies
         run: |
           set -eux
-
           sudo apt-get update
-
           sudo apt-get install -y \
             build-essential \
             bc \
@@ -33,7 +31,6 @@ jobs:
       - name: Fetch Motorola Kernel and Prepare Headers
         run: |
           set -eux
-
           git clone \
             --depth=1 \
             --branch android-16-release-w1wn36.18-114 \
@@ -41,7 +38,6 @@ jobs:
             kernel
 
           cd kernel
-
           make \
             ARCH=arm64 \
             LLVM=1 \
@@ -60,7 +56,6 @@ jobs:
       - name: Compile 8188eu.ko Module
         run: |
           set -eux
-
           make \
             -C "$GITHUB_WORKSPACE/kernel" \
             M="$GITHUB_WORKSPACE" \
@@ -70,41 +65,38 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu- \
             modules
 
-          echo "Searching for built modules:"
-          find "$GITHUB_WORKSPACE" \
-            -type f \
-            -name "*.ko" \
-            -print
-
-      - name: Copy module to artifact path
+      - name: Prepare Artifact
         run: |
           set -eux
+          # Create an output directory to prevent file-copy collisions
+          mkdir -p "$GITHUB_WORKSPACE/out"
 
+          # Ignore the kernel folder so we don't accidentally grab a random MTK module
           MODULE="$(
             find "$GITHUB_WORKSPACE" \
+              -path "$GITHUB_WORKSPACE/kernel" -prune -o \
               -type f \
-              -name "*.ko" \
-              | head -n 1
+              -name "8188eu.ko" \
+              -print | head -n 1
           )"
 
           if [ -z "$MODULE" ]; then
-            echo "No .ko file was produced."
+            echo "No 8188eu.ko file was produced."
             exit 1
           fi
 
           echo "Found: $MODULE"
-          cp "$MODULE" "$GITHUB_WORKSPACE/8188eu.ko"
+          cp "$MODULE" "$GITHUB_WORKSPACE/out/8188eu.ko"
 
       - name: Verify Module
         run: |
           set -eux
-
-          test -f "$GITHUB_WORKSPACE/8188eu.ko"
-          file "$GITHUB_WORKSPACE/8188eu.ko"
+          test -f "$GITHUB_WORKSPACE/out/8188eu.ko"
+          file "$GITHUB_WORKSPACE/out/8188eu.ko"
 
       - name: Upload 8188eu.ko Artifact
         uses: actions/upload-artifact@v4
         with:
           name: 8188eu-GKI-5.15
-          path: 8188eu.ko
+          path: out/8188eu.ko
           if-no-files-found: error
