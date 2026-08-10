@@ -17,17 +17,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev clang lld llvm gcc-aarch64-linux-gnu
 
-      - name: Fetch Android 13-5.15 GKI Kernel Headers
+      - name: Fetch Android 13-5.15 GKI Kernel Headers & Patch Driver
         run: |
           git clone --depth 1 https://android.googlesource.com/kernel/common -b android13-5.15 common
           cd common
           make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig prepare modules_prepare
           
-          # Fix Android GKI Backport Mismatch:
-          # GKI 5.15 backports 6.3+ wireless APIs. Spoof the kernel version header 
-          # so the driver triggers the modern 6.x code paths instead of the old 5.15 ones.
-          echo "#undef LINUX_VERSION_CODE" >> include/generated/uapi/linux/version.h
-          echo "#define LINUX_VERSION_CODE 393984" >> include/generated/uapi/linux/version.h
+          # Cleanly overwrite the version macro instead of duplicating it
+          sed -i 's/#define LINUX_VERSION_CODE .*/#define LINUX_VERSION_CODE 393984/' include/generated/uapi/linux/version.h
+
+          # Fix uninitialized variable compiler warnings in rtw_recv.h
+          cd ../include
+          sed -i 's/_buffer \*buf_desc;/_buffer *buf_desc = NULL;/' rtw_recv.h
+          sed -i 's/u8 \*buf_star;/u8 *buf_star = NULL;/' rtw_recv.h
 
       - name: Compile 8188eu.ko Module
         run: |
