@@ -1,23 +1,34 @@
-name: Build 8188eu for Moto G77
+name: Find Moto G77 kernel branch
 
 on:
   workflow_dispatch:
 
-env:
-  KERNEL_REPO: https://github.com/MotorolaMobilityLLC/kernel-mtk.git
-  KERNEL_REF: android-13-release-t1tn33.14-90-9
-  KERNEL_DEFCONFIG: gki_defconfig
-  ARCH: arm64
-  CROSS_COMPILE: aarch64-linux-gnu-
-
 jobs:
-  build:
+  test-kernel-branch:
+    name: Test ${{ matrix.kernel_ref }}
     runs-on: ubuntu-22.04
+    continue-on-error: true
+
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel_ref:
+          - android-16-release-w1ucs36h.96-24-4-5
+          - android-16-release-w1vc36h.14-20-1
+          - android-16-release-w1ve36h.10-12r3
+          - android-16-release-w1vns36h.60-66-4
+          - android-16-release-w1vns36h.60-82-1
+          - android-16-release-w1vo36.88-36-7
+          - android-16-release-w1vvs36h.7-108-8-3
+          - android-16-release-w1wn36.18-114
+          - android-16-release-w3wg36.67-30-15
+          - android-16-release-w3wm36.40-46-2
+
+    env:
+      KERNEL_REPO: https://github.com/MotorolaMobilityLLC/kernel-mtk.git
+      EXPECTED_KERNEL: 5.15.189-android13-8-00018-g9c82b71884fd-ab14885418
 
     steps:
-      - name: Checkout RTL8188EUS driver
-        uses: actions/checkout@v5
-
       - name: Install build dependencies
         run: |
           set -eux
@@ -38,10 +49,11 @@ jobs:
             llvm \
             make \
             python3 \
-            dwarves \
-            zip
+            dwarves
 
-      - name: Clone Moto G77 kernel
+      - name: Clone kernel branch
+        env:
+          KERNEL_REF: ${{ matrix.kernel_ref }}
         run: |
           set -eux
 
@@ -53,209 +65,96 @@ jobs:
 
           test -f kernel/Makefile
 
-      - name: Check kernel defconfig
+      - name: Find ARM64 defconfig
         run: |
           set -eux
 
           cd kernel
 
-          if [ ! -f "arch/arm64/configs/$KERNEL_DEFCONFIG" ]; then
-            echo "Defconfig not found:"
-            echo "arch/arm64/configs/$KERNEL_DEFCONFIG"
-            echo
-            echo "Available candidates:"
-
+          DEFCONFIG="$(
             find arch/arm64/configs \
               -maxdepth 1 \
               -type f \
-              | grep -Ei "gki|mtk|6835|t1tn|defconfig" \
-              || true
+              | grep -Ei \
+                'gki|w1|w3|mtk|6835|defconfig' \
+              | head -n 1
+          )"
 
+          if [ -z "$DEFCONFIG" ]; then
+            echo "No likely ARM64 defconfig found."
+            find arch/arm64/configs \
+              -maxdepth 1 \
+              -type f \
+              -print \
+              | head -100
             exit 1
           fi
+
+          DEFCONFIG_NAME="$(basename "$DEFCONFIG")"
+
+          echo "Selected defconfig:"
+          echo "$DEFCONFIG_NAME"
+
+          echo "DEFCONFIG_NAME=$DEFCONFIG_NAME" \
+            >> "$GITHUB_ENV"
 
       - name: Configure kernel
         run: |
           set -eux
 
-          cd kernel
-
-          make \
-            ARCH="$ARCH" \
-            CROSS_COMPILE="$CROSS_COMPILE" \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            "$KERNEL_DEFCONFIG"
-
-          test -x scripts/config
-
-          ./scripts/config --enable CONFIG_WLAN
-          ./scripts/config --enable CONFIG_CFG80211
-          ./scripts/config --enable CONFIG_MAC80211
-          ./scripts/config --enable CONFIG_USB
-
-          make \
-            ARCH="$ARCH" \
-            CROSS_COMPILE="$CROSS_COMPILE" \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            olddefconfig
-
-          echo "Kernel wireless configuration:"
-
-          grep -E \
-            "CONFIG_(WLAN|CFG80211|MAC80211|WLAN_VENDOR_REALTEK)" \
-            .config \
-            || true
-
-          grep -q "^CONFIG_WLAN=y" .config
-          grep -q "^CONFIG_CFG80211=y" .config
-          grep -q "^CONFIG_MAC80211=y" .config
-
-      - name: Prepare kernel
-        run: |
-          set -eux
-
           make \
             -C kernel \
-            ARCH="$ARCH" \
-            CROSS_COMPILE="$CROSS_COMPILE" \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
             LLVM=1 \
             LLVM_IAS=1 \
-            modules_prepare
+            "$DEFCONFIG_NAME"
 
-      - name: Build RTL8188EUS driver
+      - name: Read kernel release
         run: |
           set -eux
-
-          KERNEL_DIR="$GITHUB_WORKSPACE/kernel"
 
           KERNEL_RELEASE="$(
             make \
               -s \
-              -C "$KERNEL_DIR" \
-              ARCH="$ARCH" \
-              CROSS_COMPILE="$CROSS_COMPILE" \
+              -C kernel \
+              ARCH=arm64 \
+              CROSS_COMPILE=aarch64-linux-gnu- \
               LLVM=1 \
+              LLVM_IAS=1 \
               kernelrelease
           )"
+
+          echo "Branch:"
+          echo "${{ matrix.kernel_ref }}"
 
           echo "Kernel release:"
           echo "$KERNEL_RELEASE"
 
-          make \
-            ARCH="$ARCH" \
-            CROSS_COMPILE="$CROSS_COMPILE" \
-            KSRC="$KERNEL_DIR" \
-            KVER="$KERNEL_RELEASE" \
-            -j"$(nproc)"
+          echo "Expected release:"
+          echo "$EXPECTED_KERNEL"
 
-      - name: Find compiled module
-        run: |
-          set -eux
+          {
+            echo "## Branch: ${{ matrix.kernel_ref }}"
+            echo
+            echo "\`$KERNEL_RELEASE\`"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
 
-          find . \
-            -type f \
-            -name "*.ko" \
-            -print
-
-          MODULE="$(
-            find . \
-              -type f \
-              \( \
-                -name "8188eu.ko" \
-                -o \
-                -name "r8188eu.ko" \
-              \) \
-              | head -n 1
-          )"
-
-          if [ -z "$MODULE" ]; then
-            echo "ERROR: No RTL8188EUS module was produced."
-            exit 1
+          if [[ "$KERNEL_RELEASE" == \
+            "$EXPECTED_KERNEL"* ]]; then
+            echo "MATCH FOUND"
+            echo "MATCHING_BRANCH=${{ matrix.kernel_ref }}" \
+              >> "$GITHUB_ENV"
+          else
+            echo "Not a match."
           fi
 
-          mkdir -p output
-
-          cp "$MODULE" output/8188eu.ko
-
-          file output/8188eu.ko
-
-          readelf -h output/8188eu.ko \
-            | grep -E "Class|Machine"
-
-      - name: Copy RTL8188EUS firmware
+      - name: Check match
         run: |
-          set -eux
-
-          mkdir -p output/firmware
-
-          find . \
-            -type f \
-            \( \
-              -iname "rtl8188eufw.bin" \
-              -o \
-              -iname "rtl8188eufw_*.bin" \
-              -o \
-              -iname "rtl8188eufw*.bin" \
-            \) \
-            -exec cp {} output/firmware/ \; \
-            || true
-
-      - name: Create driver loader
-        run: |
-          set -eux
-
-          printf '%s\n' \
-            '#!/system/bin/sh' \
-            'MODDIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"' \
-            'MODULE="$MODDIR/8188eu.ko"' \
-            'if [ ! -f "$MODULE" ]; then' \
-            '    echo "8188eu.ko not found"' \
-            '    exit 1' \
-            'fi' \
-            'insmod "$MODULE"' \
-            'sleep 2' \
-            'ip link' \
-            > output/load-driver.sh
-
-          chmod +x output/load-driver.sh
-
-      - name: Create README
-        run: |
-          set -eux
-
-          printf '%s\n' \
-            'RTL8188EUS Android driver' \
-            '' \
-            'Target adapter: TP-Link TL-WN722N v3' \
-            'Target architecture: arm64' \
-            'Target kernel branch: android-13-release-t1tn33.14-90-9' \
-            '' \
-            'The module must match the running phone kernel.' \
-            'Do not load it on a different kernel.' \
-            '' \
-            'Kernel module: 8188eu.ko' \
-            'Firmware location: /system/etc/firmware/rtlwifi/' \
-            > output/README.txt
-
-      - name: Create ZIP archive
-        run: |
-          set -eux
-
-          cd output
-
-          zip -r \
-            ../rtl8188eus-moto-g77.zip \
-            .
-
-      - name: Upload compiled driver
-        uses: actions/upload-artifact@v4
-        with:
-          name: rtl8188eus-moto-g77
-          path: |
-            rtl8188eus-moto-g77.zip
-            output/8188eu.ko
-            output/load-driver.sh
-            output/README.txt
-          if-no-files-found: error
+          if [ -n "${MATCHING_BRANCH:-}" ]; then
+            echo "MATCHING BRANCH:"
+            echo "$MATCHING_BRANCH"
+          else
+            echo "This branch does not match the phone kernel."
+          fi
