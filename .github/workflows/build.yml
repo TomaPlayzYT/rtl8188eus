@@ -8,50 +8,45 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout Driver Source (Modern Fork)
+      - name: Checkout Driver Source
         uses: actions/checkout@v4
         with:
-          repository: 'KanuX-14/rtl8188eus'
+          repository: KanuX-14/rtl8188eus
           path: driver
 
-      - name: Set up Build Dependencies & Toolchains
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential \
-            bc \
-            bison \
-            flex \
-            libssl-dev \
-            libelf-dev \
-            clang \
-            lld \
-            llvm \
-            gcc-aarch64-linux-gnu
+            build-essential bc bison flex libssl-dev libelf-dev \
+            clang lld llvm gcc-aarch64-linux-gnu git
 
-      - name: Fetch Android 13-5.15 GKI Kernel & Prepare Headers
+      - name: Fetch Android GKI 5.15 kernel
         run: |
-          git clone --depth 1 https://android.googlesource.com/kernel/common -b android13-5.15 kernel
+          git clone --depth 1 -b android13-5.15 \
+            https://android.googlesource.com/kernel/common kernel
           cd kernel
-          make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig prepare modules_prepare
-          cd ..
+          make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
+          make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- prepare modules_prepare
 
-      - name: Patch Driver Sources for Clean Build
+      - name: Patch driver for clang build
         run: |
-          # Fix uninitialized variable warnings in rtw_recv.h
+          test -f driver/include/rtw_recv.h
+          test -f driver/core/rtw_security.c
+
           sed -i 's/_buffer *buf_desc;/_buffer *buf_desc = NULL;/' driver/include/rtw_recv.h
           sed -i 's/u8 *buf_star;/u8 *buf_star = NULL;/' driver/include/rtw_recv.h
-
-          # Fix Clang strict parenthetical equality warnings in rtw_security.c
           sed -i 's/if ((pattrib->encrypt == _AES_))/if (pattrib->encrypt == _AES_)/g' driver/core/rtw_security.c
           sed -i 's/if ((prxattrib->encrypt == _AES_))/if (prxattrib->encrypt == _AES_)/g' driver/core/rtw_security.c
 
-      - name: Compile 8188eu.ko Module (GKI 5.15, arm64)
+      - name: Build module
         run: |
-          make -C $(pwd)/kernel M=$(pwd)/driver ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- modules
+          make -C "$PWD/kernel" M="$PWD/driver" \
+            ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- modules
+          find "$PWD/driver" -name '*.ko' -o -name '*.ko.*'
 
-      - name: Upload 8188eu.ko Artifact
+      - name: Upload module
         uses: actions/upload-artifact@v4
         with:
-          name: 8188eu-GKI-5.15
-          path: driver/8188eu.ko
+          name: 8188eu-gki-5.15
+          path: driver/**/*.ko
