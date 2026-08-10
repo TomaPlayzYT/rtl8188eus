@@ -62,11 +62,13 @@ jobs:
             echo "arch/arm64/configs/$KERNEL_DEFCONFIG"
             echo
             echo "Available likely defconfigs:"
+
             find arch/arm64/configs \
               -maxdepth 1 \
               -type f \
               | grep -Ei "gki|mtk|6835|t1tn|defconfig" \
               || true
+
             exit 1
           fi
 
@@ -103,6 +105,7 @@ jobs:
             olddefconfig
 
           echo "Kernel wireless configuration:"
+
           grep -E \
             "CONFIG_(WLAN|CFG80211|MAC80211|WLAN_VENDOR_REALTEK)" \
             .config \
@@ -239,10 +242,14 @@ TP-Link TL-WN722N v3
 Target architecture:
 arm64
 
+Target kernel repository:
+https://github.com/MotorolaMobilityLLC/kernel-mtk.git
+
 Target kernel branch:
 android-13-release-t1tn33.14-90-9
 
 The module must match the running phone kernel's:
+
 - kernel release
 - vermagic
 - exported symbols
@@ -254,7 +261,7 @@ Kernel module:
 8188eu.ko
 
 Firmware location:
- /system/etc/firmware/rtlwifi/
+/system/etc/firmware/rtlwifi/
 EOF
 
       - name: Create ZIP archive
