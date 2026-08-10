@@ -70,10 +70,30 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu- \
             modules
 
+          echo "Searching for built modules:"
           find "$GITHUB_WORKSPACE" \
             -type f \
             -name "*.ko" \
             -print
+
+      - name: Copy module to artifact path
+        run: |
+          set -eux
+
+          MODULE="$(
+            find "$GITHUB_WORKSPACE" \
+              -type f \
+              -name "*.ko" \
+              | head -n 1
+          )"
+
+          if [ -z "$MODULE" ]; then
+            echo "No .ko file was produced."
+            exit 1
+          fi
+
+          echo "Found: $MODULE"
+          cp "$MODULE" "$GITHUB_WORKSPACE/8188eu.ko"
 
       - name: Verify Module
         run: |
