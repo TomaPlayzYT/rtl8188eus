@@ -1,4 +1,4 @@
-name: Build Android GKI 5.15 Module
+name: Build 8188eu for android13-5.15
 
 on:
   workflow_dispatch:
@@ -6,64 +6,32 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-
     steps:
-      - name: Checkout Repository
+      - name: Checkout driver source
         uses: actions/checkout@v4
 
-      - name: Set up Build Dependencies
+      - name: Install dependencies
         run: |
-          set -eux
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            bc \
-            bison \
-            flex \
-            libssl-dev \
-            libelf-dev \
-            clang \
-            lld \
-            llvm \
-            gcc-aarch64-linux-gnu \
-            git \
-            python3 \
-            rsync \
-            cpio \
-            libncurses-dev
+          sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev \
+            clang lld llvm gcc-aarch64-linux-gnu git python3 rsync cpio libncurses-dev
 
-      - name: Fetch Motorola Kernel and Prepare Headers
+      - name: Clone android13-5.15 GKI kernel
         run: |
-          set -eux
-          git clone \
-            --depth=1 \
-            --single-branch \
-            --branch android-16-release-w1wn36.18-114 \
-            https://github.com/MotorolaMobilityLLC/kernel-mtk.git \
-            kernel
+          git clone --depth=1 --branch android13-5.15 \
+            https://android.googlesource.com/kernel/common.git kernel
 
+      - name: Prepare kernel
+        run: |
           cd kernel
-          make -j$(nproc) \
-            ARCH=arm64 \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            gki_defconfig
+          make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
+          make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- prepare modules_prepare
 
-          make -j$(nproc) \
-            ARCH=arm64 \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            prepare \
-            modules_prepare
-
-      - name: Compile 8188eu.ko Module
+      - name: Build 8188eu.ko
         run: |
-          set -eux
           make -j$(nproc) \
-            -C "$GITHUB_WORKSPACE/kernel" \
-            M="$GITHUB_WORKSPACE" \
+            -C $GITHUB_WORKSPACE/kernel \
+            M=$GITHUB_WORKSPACE \
             ARCH=arm64 \
             LLVM=1 \
             LLVM_IAS=1 \
@@ -75,36 +43,23 @@ jobs:
             KCFLAGS="-DCONFIG_LITTLE_ENDIAN -DCONFIG_IOCTL_CFG80211=1 -Wno-error" \
             modules
 
-      - name: Prepare Artifact
+      - name: Find and upload module
         run: |
-          set -eux
-          mkdir -p "$GITHUB_WORKSPACE/out"
-
-          # Search for any .ko file produced outside the kernel directory
-          MODULE="$(find "$GITHUB_WORKSPACE" -type f -name "*.ko" ! -path "$GITHUB_WORKSPACE/kernel/*" | head -n 1)"
-
+          mkdir -p out
+          MODULE=$(find . -name "*.ko" ! -path "./kernel/*" | head -n1)
           if [ -z "$MODULE" ]; then
-            echo "=== ERROR: No module .ko file was produced ==="
-            echo "Directory layout:"
-            ls -la "$GITHUB_WORKSPACE"
-            echo "Looking for any .ko files:"
-            find "$GITHUB_WORKSPACE" -name "*.ko" || true
+            echo "No .ko found!"
+            find . -name "*.ko" || true
             exit 1
           fi
+          echo "Found: $MODULE"
+          cp "$MODULE" out/8188eu.ko
+          file out/8188eu.ko
+          ls -lh out/8188eu.ko
 
-          echo "Found compiled module: $MODULE"
-          cp "$MODULE" "$GITHUB_WORKSPACE/out/8188eu.ko"
-
-      - name: Verify Module
-        run: |
-          set -eux
-          test -f "$GITHUB_WORKSPACE/out/8188eu.ko"
-          file "$GITHUB_WORKSPACE/out/8188eu.ko"
-          ls -lh "$GITHUB_WORKSPACE/out/8188eu.ko"
-
-      - name: Upload 8188eu.ko Artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: 8188eu-GKI-5.15
+          name: 8188eu-android13-5.15
           path: out/8188eu.ko
           if-no-files-found: error
