@@ -1,3 +1,4 @@
+
 name: Build 8188eu for android13-5.15
 
 on:
@@ -26,24 +27,13 @@ jobs:
         run: |
           set -eux
           cd kernel
-          make -j$(nproc) \
-            ARCH=arm64 \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            gki_defconfig
+          make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
+          make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- prepare modules_prepare
 
-          make -j$(nproc) \
-            ARCH=arm64 \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            prepare modules_prepare
-
-      - name: Clone RTL8188EU driver (SimplyCEO fork)
+      - name: Clone RTL8188EU driver (better patched fork)
         run: |
           set -eux
-          git clone --depth=1 https://github.com/SimplyCEO/rtl8188eus.git driver
+          git clone --depth=1 https://github.com/gglluukk/rtl8188eus.git driver
 
       - name: Build 8188eu.ko
         run: |
@@ -68,19 +58,17 @@ jobs:
           set -eux
           mkdir -p out
           MODULE=$(find driver -name "*.ko" | head -n 1)
-
           if [ -z "$MODULE" ]; then
-            echo "=== ERROR: No .ko file found ==="
+            echo "=== No .ko found ==="
             find . -name "*.ko" || true
             exit 1
           fi
-
-          echo "Found module: $MODULE"
+          echo "Found: $MODULE"
           cp "$MODULE" out/8188eu.ko
           file out/8188eu.ko
           ls -lh out/8188eu.ko
 
-      - name: Upload 8188eu.ko
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: 8188eu-android13-5.15
