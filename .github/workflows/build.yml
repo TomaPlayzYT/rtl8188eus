@@ -26,26 +26,31 @@ jobs:
             lld \
             llvm \
             gcc-aarch64-linux-gnu \
-            git
+            git \
+            python3 \
+            rsync \
+            cpio \
+            libncurses-dev
 
       - name: Fetch Motorola Kernel and Prepare Headers
         run: |
           set -eux
           git clone \
             --depth=1 \
+            --single-branch \
             --branch android-16-release-w1wn36.18-114 \
             https://github.com/MotorolaMobilityLLC/kernel-mtk.git \
             kernel
 
           cd kernel
-          make \
+          make -j$(nproc) \
             ARCH=arm64 \
             LLVM=1 \
             LLVM_IAS=1 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             gki_defconfig
 
-          make \
+          make -j$(nproc) \
             ARCH=arm64 \
             LLVM=1 \
             LLVM_IAS=1 \
@@ -56,7 +61,7 @@ jobs:
       - name: Compile 8188eu.ko Module
         run: |
           set -eux
-          make \
+          make -j$(nproc) \
             -C "$GITHUB_WORKSPACE/kernel" \
             M="$GITHUB_WORKSPACE" \
             ARCH=arm64 \
@@ -69,6 +74,7 @@ jobs:
             CONFIG_IOCTL_CFG80211=y \
             KCFLAGS="-DCONFIG_LITTLE_ENDIAN -DCONFIG_IOCTL_CFG80211=1 -Wno-error" \
             modules
+
       - name: Prepare Artifact
         run: |
           set -eux
@@ -81,6 +87,8 @@ jobs:
             echo "=== ERROR: No module .ko file was produced ==="
             echo "Directory layout:"
             ls -la "$GITHUB_WORKSPACE"
+            echo "Looking for any .ko files:"
+            find "$GITHUB_WORKSPACE" -name "*.ko" || true
             exit 1
           fi
 
@@ -92,6 +100,7 @@ jobs:
           set -eux
           test -f "$GITHUB_WORKSPACE/out/8188eu.ko"
           file "$GITHUB_WORKSPACE/out/8188eu.ko"
+          ls -lh "$GITHUB_WORKSPACE/out/8188eu.ko"
 
       - name: Upload 8188eu.ko Artifact
         uses: actions/upload-artifact@v4
