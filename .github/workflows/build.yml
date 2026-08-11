@@ -6,32 +6,52 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    steps:
-      - name: Checkout driver source
-        uses: actions/checkout@v4
 
+    steps:
       - name: Install dependencies
         run: |
+          set -eux
           sudo apt-get update
-          sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev \
+          sudo apt-get install -y \
+            build-essential bc bison flex libssl-dev libelf-dev \
             clang lld llvm gcc-aarch64-linux-gnu git python3 rsync cpio libncurses-dev
 
       - name: Clone android13-5.15 GKI kernel
         run: |
+          set -eux
           git clone --depth=1 --branch android13-5.15 \
             https://android.googlesource.com/kernel/common.git kernel
 
       - name: Prepare kernel
         run: |
+          set -eux
           cd kernel
-          make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
-          make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- prepare modules_prepare
+          make -j$(nproc) \
+            ARCH=arm64 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            gki_defconfig
+
+          make -j$(nproc) \
+            ARCH=arm64 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            prepare modules_prepare
+
+      - name: Clone RTL8188EU driver (SimplyCEO fork)
+        run: |
+          set -eux
+          git clone --depth=1 https://github.com/SimplyCEO/rtl8188eus.git driver
 
       - name: Build 8188eu.ko
         run: |
+          set -eux
+          cd driver
           make -j$(nproc) \
-            -C $GITHUB_WORKSPACE/kernel \
-            M=$GITHUB_WORKSPACE \
+            -C "$GITHUB_WORKSPACE/kernel" \
+            M="$GITHUB_WORKSPACE/driver" \
             ARCH=arm64 \
             LLVM=1 \
             LLVM_IAS=1 \
@@ -43,21 +63,24 @@ jobs:
             KCFLAGS="-DCONFIG_LITTLE_ENDIAN -DCONFIG_IOCTL_CFG80211=1 -Wno-error" \
             modules
 
-      - name: Find and upload module
+      - name: Prepare artifact
         run: |
+          set -eux
           mkdir -p out
-          MODULE=$(find . -name "*.ko" ! -path "./kernel/*" | head -n1)
+          MODULE=$(find driver -name "*.ko" | head -n 1)
+
           if [ -z "$MODULE" ]; then
-            echo "No .ko found!"
+            echo "=== ERROR: No .ko file found ==="
             find . -name "*.ko" || true
             exit 1
           fi
-          echo "Found: $MODULE"
+
+          echo "Found module: $MODULE"
           cp "$MODULE" out/8188eu.ko
           file out/8188eu.ko
           ls -lh out/8188eu.ko
 
-      - name: Upload artifact
+      - name: Upload 8188eu.ko
         uses: actions/upload-artifact@v4
         with:
           name: 8188eu-android13-5.15
