@@ -1,4 +1,4 @@
-name: Build RTL8188EUS for Android GKI 5.15
+name: Fast Build RTL8188EUS for Android GKI 5.15
 
 on:
   workflow_dispatch:
@@ -22,42 +22,32 @@ jobs:
           sudo apt-get install -y bc bison build-essential curl flex git libssl-dev \
           libelf-dev unzip python3 crossbuild-essential-arm64 kmod cpio lld llvm
 
-      - name: Download Android Clang Toolchain
+      - name: Download Clang
         run: |
-          echo "Cloning Proton Clang..."
-          # Using Proton Clang as it is a stable, reliable toolchain for Android kernels
-          # This prevents 404 errors from Google's Gitiles archive links
           git clone --depth=1 https://github.com/kdrag0n/proton-clang $GITHUB_WORKSPACE/clang
 
       - name: Clone GKI 5.15 Kernel Source
         run: |
-          echo "Cloning Android GKI 5.15 Source..."
           git clone --depth 1 -b android14-5.15 https://android.googlesource.com/kernel/common $GITHUB_WORKSPACE/kernel
 
       - name: Clone RTL8188EUS Source
         run: |
-          echo "Cloning SimplyCEO RTL8188EUS Repository..."
           git clone --depth 1 https://gitlab.com/SimplyCEO/rtl8188eus.git $GITHUB_WORKSPACE/rtl8188eus
 
-      - name: Build GKI Kernel (Prepare Headers & Symvers)
+      - name: Prepare Kernel Headers (Instant)
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           cd $GITHUB_WORKSPACE/kernel
-          
           mkdir -p out
-          
-          # 1. Configure the kernel for GKI ARM64
           make O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
-          
-          # 2. Build the kernel
-          make O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
+          make O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare -j$(nproc)
+          # Copy uploaded Module.symvers into kernel output directory
+          cp $GITHUB_WORKSPACE/Module.symvers $GITHUB_WORKSPACE/kernel/out/Module.symvers
 
       - name: Build RTL8188EUS Module
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           cd $GITHUB_WORKSPACE/rtl8188eus
-          
-          # Build the Wi-Fi module
           make ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- \
             KSRC=$GITHUB_WORKSPACE/kernel/out \
             CONFIG_PLATFORM_I386_PC=n \
