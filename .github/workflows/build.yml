@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - master
+      - v5.3.9
 
 jobs:
   build:
@@ -18,6 +19,8 @@ jobs:
 
       - name: Install Build Dependencies
         run: |
+          set -euxo pipefail
+
           sudo apt-get update
           sudo apt-get install -y \
             bc \
@@ -38,51 +41,25 @@ jobs:
 
       - name: Download Clang
         run: |
+          set -euxo pipefail
+
           git clone --depth=1 \
             https://github.com/kdrag0n/proton-clang \
             "$GITHUB_WORKSPACE/clang"
 
       - name: Clone GKI 5.15 Kernel Source
         run: |
+          set -euxo pipefail
+
           git clone --depth=1 \
             -b android14-5.15 \
             https://android.googlesource.com/kernel/common \
             "$GITHUB_WORKSPACE/kernel"
 
-      - name: Clone RTL8188EUS Source
-        run: |
-          git clone --depth=1 \
-            https://gitlab.com/SimplyCEO/rtl8188eus.git \
-            "$GITHUB_WORKSPACE/rtl8188eus"
-
-      - name: Inspect RTL8188EUS Headers
-        run: |
-          cd "$GITHUB_WORKSPACE/rtl8188eus"
-
-          echo "========================================"
-          echo "Searching for drv_types.h"
-          echo "========================================"
-
-          find . -name "drv_types.h" -print
-
-          echo
-          echo "========================================"
-          echo "RTL8188EUS directory"
-          echo "========================================"
-
-          ls -la
-
-          echo
-          echo "========================================"
-          echo "Relevant Makefile configuration"
-          echo "========================================"
-
-          grep -RniE \
-            "EXTRA_CFLAGS|ccflags-y|subdir-ccflags-y|drv_types|INCLUDE|INC_PATH" \
-            Makefile core/Makefile 2>/dev/null || true
-
       - name: Prepare Kernel Headers
         run: |
+          set -euxo pipefail
+
           export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
 
           cd "$GITHUB_WORKSPACE/kernel"
@@ -114,48 +91,44 @@ jobs:
           echo "========================================"
 
           SYMFILE=$(find "$GITHUB_WORKSPACE" \
-            -maxdepth 3 \
+            -maxdepth 4 \
             -name "Module.symvers" \
             -type f \
             | head -n 1)
 
           if [ -n "$SYMFILE" ]; then
-            echo "Found uploaded symvers at:"
+            echo "Found Module.symvers at:"
             echo "$SYMFILE"
-
-            cp "$SYMFILE" \
-              "$GITHUB_WORKSPACE/kernel/out/Module.symvers"
+            cp "$SYMFILE" "$GITHUB_WORKSPACE/kernel/out/Module.symvers"
           else
-            echo "No uploaded symvers found."
+            echo "No Module.symvers found in workspace."
             echo "Fetching Android 5.15 Module.symvers..."
-
             python3 - <<'PY'
-          import urllib.request
-          import base64
-          import os
+import os
+import base64
+import urllib.request
 
-          url = (
-              "https://android.googlesource.com/kernel/prebuilts/"
-              "5.15/arm64/+/refs/heads/main/Module.symvers?format=TEXT"
-          )
+url = (
+    "https://android.googlesource.com/kernel/prebuilts/"
+    "5.15/arm64/+/refs/heads/main/Module.symvers?format=TEXT"
+)
 
-          output = os.path.join(
-              os.environ["GITHUB_WORKSPACE"],
-              "kernel",
-              "out",
-              "Module.symvers"
-          )
+output = os.path.join(
+    os.environ["GITHUB_WORKSPACE"],
+    "kernel",
+    "out",
+    "Module.symvers",
+)
 
-          print(f"Downloading: {url}")
+print(f"Downloading: {url}")
+data = urllib.request.urlopen(url).read()
+decoded = base64.b64decode(data)
 
-          data = urllib.request.urlopen(url).read()
-          decoded = base64.b64decode(data)
+with open(output, "wb") as f:
+    f.write(decoded)
 
-          with open(output, "wb") as f:
-              f.write(decoded)
-
-          print(f"Saved Module.symvers to: {output}")
-          PY
+print(f"Saved Module.symvers to: {output}")
+PY
           fi
 
           echo
@@ -167,9 +140,11 @@ jobs:
 
       - name: Build RTL8188EUS Module
         run: |
+          set -euxo pipefail
+
           export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
 
-          cd "$GITHUB_WORKSPACE/rtl8188eus"
+          cd "$GITHUB_WORKSPACE"
 
           echo "========================================"
           echo "Compiler"
@@ -190,6 +165,8 @@ jobs:
           echo "Building RTL8188EUS"
           echo "========================================"
 
+          make clean || true
+
           make \
             ARCH=arm64 \
             CC=clang \
@@ -199,16 +176,33 @@ jobs:
             -j"$(nproc)" \
             KSRC="$GITHUB_WORKSPACE/kernel/out" \
             CONFIG_PLATFORM_I386_PC=n \
-            CONFIG_PLATFORM_ARM_AARCH64=y \
-            CONFIG_PLATFORM_ARM64=y \
+            CONFIG_PLATFORM_ARM_RPI=n \
+            CONFIG_PLATFORM_ARM64_RPI=n \
+            CONFIG_PLATFORM_ANDROID_X86=n \
+            CONFIG_PLATFORM_ANDROID_INTEL_X86=n \
+            CONFIG_USB_HCI=y \
+            CONFIG_PCI_HCI=n \
+            CONFIG_SDIO_HCI=n \
+            CONFIG_GSPI_HCI=n \
+            CONFIG_RTL8188E=y \
+            CONFIG_RTL8812A=n \
+            CONFIG_RTL8821A=n \
+            CONFIG_RTL8192E=n \
+            CONFIG_RTL8723B=n \
+            CONFIG_RTL8814A=n \
+            CONFIG_RTL8723C=n \
+            CONFIG_RTL8188F=n \
+            CONFIG_RTL8822B=n \
+            CONFIG_RTL8723D=n \
+            CONFIG_RTL8821C=n \
             CONFIG_LITTLE_ENDIAN=y \
             EXTRA_CFLAGS="\
-          -I$GITHUB_WORKSPACE/rtl8188eus \
-          -I$GITHUB_WORKSPACE/rtl8188eus/include \
-          -I$GITHUB_WORKSPACE/rtl8188eus/core \
-          -I$GITHUB_WORKSPACE/rtl8188eus/hal \
-          -I$GITHUB_WORKSPACE/rtl8188eus/os_dep \
-          -I$GITHUB_WORKSPACE/rtl8188eus/OUTSRC \
+          -I$GITHUB_WORKSPACE \
+          -I$GITHUB_WORKSPACE/include \
+          -I$GITHUB_WORKSPACE/core \
+          -I$GITHUB_WORKSPACE/hal \
+          -I$GITHUB_WORKSPACE/os_dep \
+          -I$GITHUB_WORKSPACE/platform \
           -DCONFIG_LITTLE_ENDIAN \
           -Wno-error \
           -Wno-unused-variable \
@@ -217,7 +211,9 @@ jobs:
 
       - name: Verify Module
         run: |
-          cd "$GITHUB_WORKSPACE/rtl8188eus"
+          set -euxo pipefail
+
+          cd "$GITHUB_WORKSPACE"
 
           echo "========================================"
           echo "Searching for built module"
@@ -253,5 +249,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: 8188eu-gki-5.15
-          path: ${{ github.workspace }}/rtl8188eus/8188eu.ko
+          path: ${{ github.workspace }}/8188eu.ko
           if-no-files-found: error
