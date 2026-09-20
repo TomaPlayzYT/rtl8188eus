@@ -1,85 +1,78 @@
-name: Build 8188eu for android13-5.15
+name: Build RTL8188EUS for Android GKI 5.15
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Allows you to manually trigger the build from the Actions tab
+  push:
+    branches:
+      - main
+      - master
 
 jobs:
   build:
+    name: Build Kernel Module
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Install dependencies
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Build Dependencies
         run: |
-          set -eux
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential bc bison flex libssl-dev libelf-dev \
-            clang lld llvm gcc-aarch64-linux-gnu git python3 rsync cpio libncurses-dev
+          sudo apt-get install -y bc bison build-essential curl flex git libssl-dev \
+          libelf-dev unzip wget python3 crossbuild-essential-arm64 kmod cpio lld llvm
 
-      - name: Clone android13-5.15 GKI kernel
+      - name: Download Android Clang Toolchain
         run: |
-          set -eux
-          git clone --depth=1 --branch android13-5.15 \
-            https://android.googlesource.com/kernel/common.git kernel
+          mkdir -p $GITHUB_WORKSPACE/clang
+          cd $GITHUB_WORKSPACE/clang
+          echo "Downloading AOSP Clang 17 (r487747c)..."
+          # We use the exact Clang version used by Google for recent GKI 5.15 builds
+          wget -qO clang.tar.gz https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r487747c.tar.gz
+          tar -xf clang.tar.gz
+          rm clang.tar.gz
 
-      - name: Prepare kernel
+      - name: Clone GKI 5.15 Kernel Source
         run: |
-          set -eux
-          cd kernel
-          make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
-          make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- prepare modules_prepare
+          echo "Cloning Android GKI 5.15 Source..."
+          # The android14-5.15 branch tracks the latest 5.15.x GKI releases
+          git clone --depth 1 -b android14-5.15 https://android.googlesource.com/kernel/common $GITHUB_WORKSPACE/kernel
 
-      - name: Clone RTL8188EU driver
+      - name: Clone RTL8188EUS Source
         run: |
-          set -eux
-          git clone --depth=1 https://github.com/gglluukk/rtl8188eus.git driver
+          echo "Cloning SimplyCEO RTL8188EUS Repository..."
+          git clone --depth 1 https://gitlab.com/SimplyCEO/rtl8188eus.git $GITHUB_WORKSPACE/rtl8188eus
 
-      - name: Fix Makefile (remove GCC-only flags)
+      - name: Build GKI Kernel (Prepare Headers & Symvers)
         run: |
-          set -eux
-          cd driver
-          # Remove flags that Clang does not understand
-          sed -i 's/-Wno-restrict//g' Makefile
-          sed -i 's/-Wno-vla-larger-than//g' Makefile
-          sed -i 's/-Werror//g' Makefile || true
-          echo "Makefile cleaned"
+          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+          cd $GITHUB_WORKSPACE/kernel
+          
+          mkdir -p out
+          
+          # 1. Configure the kernel for GKI ARM64
+          make O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
+          
+          # 2. Build the kernel (This takes ~45 mins on GitHub Actions)
+          # This step is mandatory because OOT modules need a fully generated Module.symvers to load without "exec format error"
+          make O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
 
-      - name: Build 8188eu.ko
+      - name: Build RTL8188EUS Module
         run: |
-          set -eux
-          cd driver
-          make -j$(nproc) \
-            -C "$GITHUB_WORKSPACE/kernel" \
-            M="$GITHUB_WORKSPACE/driver" \
-            ARCH=arm64 \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CONFIG_RTL8188EU=m \
+          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+          cd $GITHUB_WORKSPACE/rtl8188eus
+          
+          # Build the Wi-Fi module
+          # We pass overrides (CONFIG_PLATFORM_I386_PC=n etc.) to force the Makefile to build for ARM64 Android instead of a standard PC
+          make ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- \
+            KSRC=$GITHUB_WORKSPACE/kernel/out \
             CONFIG_PLATFORM_I386_PC=n \
             CONFIG_PLATFORM_ARM_AARCH64=y \
-            CONFIG_IOCTL_CFG80211=y \
-            KCFLAGS="-DCONFIG_LITTLE_ENDIAN -DCONFIG_IOCTL_CFG80211=1 -Wno-error" \
-            modules
+            CONFIG_PLATFORM_ARM64=y \
+            -j$(nproc)
 
-      - name: Prepare artifact
-        run: |
-          set -eux
-          mkdir -p out
-          MODULE=$(find driver -name "*.ko" | head -n 1)
-          if [ -z "$MODULE" ]; then
-            echo "=== No .ko found ==="
-            find . -name "*.ko" || true
-            exit 1
-          fi
-          echo "Found: $MODULE"
-          cp "$MODULE" out/8188eu.ko
-          file out/8188eu.ko
-          ls -lh out/8188eu.ko
-
-      - name: Upload artifact
+      - name: Upload Module Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: 8188eu-android13-5.15
-          path: out/8188eu.ko
-          if-no-files-found: error
+          name: 8188eu-gki-5.15.ko
+          path: ${{ github.workspace }}/rtl8188eus/8188eu.ko
