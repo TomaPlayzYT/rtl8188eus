@@ -41,8 +41,18 @@ jobs:
           mkdir -p out
           make O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
           make O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare -j$(nproc)
-          # Copy uploaded Module.symvers into kernel output directory
-          cp $GITHUB_WORKSPACE/Module.symvers $GITHUB_WORKSPACE/kernel/out/Module.symvers
+          
+          # Auto-detect any symvers file uploaded to the repository, or fallback to direct download
+          if [ -f "$GITHUB_WORKSPACE/Module.symvers" ]; then
+            cp "$GITHUB_WORKSPACE/Module.symvers" "$GITHUB_WORKSPACE/kernel/out/Module.symvers"
+          elif [ -f "$GITHUB_WORKSPACE/vmlinux.symvers" ]; then
+            cp "$GITHUB_WORKSPACE/vmlinux.symvers" "$GITHUB_WORKSPACE/kernel/out/Module.symvers"
+          elif ls $GITHUB_WORKSPACE/*.symvers* 1> /dev/null 2>&1; then
+            cp $GITHUB_WORKSPACE/*.symvers* "$GITHUB_WORKSPACE/kernel/out/Module.symvers"
+          else
+            echo "No uploaded symvers found, fetching from Android prebuilts..."
+            curl -sSL "https://android.googlesource.com/kernel/prebuilts/5.15/arm64/+/refs/heads/main/Module.symvers?format=TEXT" | base64 -d > "$GITHUB_WORKSPACE/kernel/out/Module.symvers"
+          fi
 
       - name: Build RTL8188EUS Module
         run: |
