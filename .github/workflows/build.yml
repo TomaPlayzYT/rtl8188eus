@@ -19,47 +19,239 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential curl flex git libssl-dev \
-          libelf-dev unzip python3 crossbuild-essential-arm64 kmod cpio lld llvm
+          sudo apt-get install -y \
+            bc \
+            bison \
+            build-essential \
+            curl \
+            flex \
+            git \
+            libssl-dev \
+            libelf-dev \
+            unzip \
+            python3 \
+            crossbuild-essential-arm64 \
+            kmod \
+            cpio \
+            lld \
+            llvm
 
       - name: Download Clang
         run: |
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang $GITHUB_WORKSPACE/clang
+          git clone --depth=1 \
+            https://github.com/kdrag0n/proton-clang \
+            "$GITHUB_WORKSPACE/clang"
 
       - name: Clone GKI 5.15 Kernel Source
         run: |
-          git clone --depth 1 -b android14-5.15 https://android.googlesource.com/kernel/common $GITHUB_WORKSPACE/kernel
+          git clone --depth=1 \
+            -b android14-5.15 \
+            https://android.googlesource.com/kernel/common \
+            "$GITHUB_WORKSPACE/kernel"
 
       - name: Clone RTL8188EUS Source
         run: |
-          git clone --depth 1 https://gitlab.com/SimplyCEO/rtl8188eus.git $GITHUB_WORKSPACE/rtl8188eus
+          git clone --depth=1 \
+            https://gitlab.com/SimplyCEO/rtl8188eus.git \
+            "$GITHUB_WORKSPACE/rtl8188eus"
 
-      - name: Prepare Kernel Headers (Instant)
+      - name: Inspect RTL8188EUS Headers
         run: |
-          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-          cd $GITHUB_WORKSPACE/kernel
+          cd "$GITHUB_WORKSPACE/rtl8188eus"
+
+          echo "========================================"
+          echo "Searching for drv_types.h"
+          echo "========================================"
+
+          find . -name "drv_types.h" -print
+
+          echo
+          echo "========================================"
+          echo "RTL8188EUS directory"
+          echo "========================================"
+
+          ls -la
+
+          echo
+          echo "========================================"
+          echo "Relevant Makefile configuration"
+          echo "========================================"
+
+          grep -RniE \
+            "EXTRA_CFLAGS|ccflags-y|subdir-ccflags-y|drv_types|INCLUDE|INC_PATH" \
+            Makefile core/Makefile 2>/dev/null || true
+
+      - name: Prepare Kernel Headers
+        run: |
+          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
+
+          cd "$GITHUB_WORKSPACE/kernel"
+
           mkdir -p out
-          make O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
-          make O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare -j$(nproc)
-          
-          SYMFILE=$(find $GITHUB_WORKSPACE -maxdepth 3 -name "*.symvers*" | head -n 1)
-          
+
+          make \
+            O=out \
+            ARCH=arm64 \
+            CC=clang \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            gki_defconfig
+
+          make \
+            O=out \
+            ARCH=arm64 \
+            CC=clang \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            modules_prepare \
+            -j"$(nproc)"
+
+          echo
+          echo "========================================"
+          echo "Looking for Module.symvers"
+          echo "========================================"
+
+          SYMFILE=$(find "$GITHUB_WORKSPACE" \
+            -maxdepth 3 \
+            -name "Module.symvers" \
+            -type f \
+            | head -n 1)
+
           if [ -n "$SYMFILE" ]; then
-            echo "Found uploaded symvers at: $SYMFILE"
-            cp "$SYMFILE" "$GITHUB_WORKSPACE/kernel/out/Module.symvers"
+            echo "Found uploaded symvers at:"
+            echo "$SYMFILE"
+
+            cp "$SYMFILE" \
+              "$GITHUB_WORKSPACE/kernel/out/Module.symvers"
           else
-            echo "No uploaded symvers found. Fetching from Android prebuilts using Python..."
-            python3 -c "import urllib.request, base64; url='https://android.googlesource.com/kernel/prebuilts/5.15/arm64/+/refs/heads/main/Module.symvers?format=TEXT'; data=urllib.request.urlopen(url).read(); open('$GITHUB_WORKSPACE/kernel/out/Module.symvers', 'wb').write(base64.b64decode(data))"
+            echo "No uploaded symvers found."
+            echo "Fetching Android 5.15 Module.symvers..."
+
+            python3 - <<'PY'
+          import urllib.request
+          import base64
+          import os
+
+          url = (
+              "https://android.googlesource.com/kernel/prebuilts/"
+              "5.15/arm64/+/refs/heads/main/Module.symvers?format=TEXT"
+          )
+
+          output = os.path.join(
+              os.environ["GITHUB_WORKSPACE"],
+              "kernel",
+              "out",
+              "Module.symvers"
+          )
+
+          print(f"Downloading: {url}")
+
+          data = urllib.request.urlopen(url).read()
+          decoded = base64.b64decode(data)
+
+          with open(output, "wb") as f:
+              f.write(decoded)
+
+          print(f"Saved Module.symvers to: {output}")
+          PY
           fi
+
+          echo
+          echo "========================================"
+          echo "Module.symvers"
+          echo "========================================"
+
+          ls -lh "$GITHUB_WORKSPACE/kernel/out/Module.symvers"
 
       - name: Build RTL8188EUS Module
         run: |
-          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-          cd $GITHUB_WORKSPACE/rtl8188eus
-          make ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc) KSRC=$GITHUB_WORKSPACE/kernel/out CONFIG_PLATFORM_I386_PC=n CONFIG_PLATFORM_ARM_AARCH64=y CONFIG_PLATFORM_ARM64=y CONFIG_LITTLE_ENDIAN=y USER_EXTRA_CFLAGS="-DCONFIG_LITTLE_ENDIAN -Wno-error -Wno-unused-variable -Wno-parentheses-equality -Wno-undef" EXTRA_CFLAGS="-DCONFIG_LITTLE_ENDIAN -Wno-error -Wno-unused-variable -Wno-parentheses-equality -Wno-undef"
+          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
+
+          cd "$GITHUB_WORKSPACE/rtl8188eus"
+
+          echo "========================================"
+          echo "Compiler"
+          echo "========================================"
+
+          which clang
+          clang --version
+
+          echo
+          echo "========================================"
+          echo "drv_types.h"
+          echo "========================================"
+
+          find . -name "drv_types.h" -print
+
+          echo
+          echo "========================================"
+          echo "Building RTL8188EUS"
+          echo "========================================"
+
+          make \
+            ARCH=arm64 \
+            CC=clang \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            -j"$(nproc)" \
+            KSRC="$GITHUB_WORKSPACE/kernel/out" \
+            CONFIG_PLATFORM_I386_PC=n \
+            CONFIG_PLATFORM_ARM_AARCH64=y \
+            CONFIG_PLATFORM_ARM64=y \
+            CONFIG_LITTLE_ENDIAN=y \
+            EXTRA_CFLAGS="\
+          -I$GITHUB_WORKSPACE/rtl8188eus \
+          -I$GITHUB_WORKSPACE/rtl8188eus/include \
+          -I$GITHUB_WORKSPACE/rtl8188eus/core \
+          -I$GITHUB_WORKSPACE/rtl8188eus/hal \
+          -I$GITHUB_WORKSPACE/rtl8188eus/os_dep \
+          -I$GITHUB_WORKSPACE/rtl8188eus/OUTSRC \
+          -DCONFIG_LITTLE_ENDIAN \
+          -Wno-error \
+          -Wno-unused-variable \
+          -Wno-parentheses-equality \
+          -Wno-undef"
+
+      - name: Verify Module
+        run: |
+          cd "$GITHUB_WORKSPACE/rtl8188eus"
+
+          echo "========================================"
+          echo "Searching for built module"
+          echo "========================================"
+
+          find . \
+            -name "*.ko" \
+            -type f \
+            -print
+
+          if [ ! -f "8188eu.ko" ]; then
+            echo
+            echo "ERROR: 8188eu.ko was not produced."
+            exit 1
+          fi
+
+          echo
+          echo "========================================"
+          echo "Module information"
+          echo "========================================"
+
+          modinfo ./8188eu.ko || true
+
+          echo
+          echo "========================================"
+          echo "Module file"
+          echo "========================================"
+
+          ls -lh ./8188eu.ko
+          file ./8188eu.ko
 
       - name: Upload Module Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: 8188eu-gki-5.15.ko
+          name: 8188eu-gki-5.15
           path: ${{ github.workspace }}/rtl8188eus/8188eu.ko
+          if-no-files-found: error
