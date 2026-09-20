@@ -11,7 +11,9 @@ on:
 jobs:
   build:
     name: Build Kernel Module
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
+    env:
+      KERNEL_SRC: ${{ github.workspace }}/kernel
 
     steps:
       - name: Checkout Code
@@ -22,7 +24,7 @@ jobs:
           set -euxo pipefail
 
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             bc \
             bison \
             build-essential \
@@ -33,43 +35,41 @@ jobs:
             libelf-dev \
             unzip \
             python3 \
-            crossbuild-essential-arm64 \
-            kmod \
+            python3-distutils \
             cpio \
-            lld \
-            llvm
+            kmod \
+            lld-18 \
+            llvm-18 \
+            clang-18 \
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu
 
-      - name: Download Clang
-        run: |
-          set -euxo pipefail
-
-          git clone --depth=1 \
-            https://github.com/kdrag0n/proton-clang \
-            "$GITHUB_WORKSPACE/clang"
+          sudo ln -sf /usr/bin/clang-18 /usr/local/bin/clang
+          sudo ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++
+          sudo ln -sf /usr/bin/ld.lld-18 /usr/local/bin/ld.lld
+          sudo ln -sf /usr/bin/llvm-objcopy-18 /usr/local/bin/llvm-objcopy
 
       - name: Clone GKI 5.15 Kernel Source
         run: |
           set -euxo pipefail
 
-          git clone --depth=1 \
+          git clone --depth=1 --single-branch \
             -b android14-5.15 \
             https://android.googlesource.com/kernel/common \
-            "$GITHUB_WORKSPACE/kernel"
+            "$KERNEL_SRC"
 
       - name: Prepare Kernel Headers
         run: |
           set -euxo pipefail
 
-          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
-
-          cd "$GITHUB_WORKSPACE/kernel"
-
+          cd "$KERNEL_SRC"
           mkdir -p out
 
           make \
             O=out \
             ARCH=arm64 \
             CC=clang \
+            HOSTCC=clang \
             LLVM=1 \
             LLVM_IAS=1 \
             CROSS_COMPILE=aarch64-linux-gnu- \
@@ -79,6 +79,7 @@ jobs:
             O=out \
             ARCH=arm64 \
             CC=clang \
+            HOSTCC=clang \
             LLVM=1 \
             LLVM_IAS=1 \
             CROSS_COMPILE=aarch64-linux-gnu- \
@@ -99,7 +100,7 @@ jobs:
           if [ -n "$SYMFILE" ]; then
             echo "Found Module.symvers at:"
             echo "$SYMFILE"
-            cp "$SYMFILE" "$GITHUB_WORKSPACE/kernel/out/Module.symvers"
+            cp "$SYMFILE" "$KERNEL_SRC/out/Module.symvers"
           else
             echo "No Module.symvers found in workspace."
             echo "Fetching Android 5.15 Module.symvers..."
@@ -113,12 +114,7 @@ url = (
     "5.15/arm64/+/refs/heads/main/Module.symvers?format=TEXT"
 )
 
-output = os.path.join(
-    os.environ["GITHUB_WORKSPACE"],
-    "kernel",
-    "out",
-    "Module.symvers",
-)
+output = os.path.join(os.environ["KERNEL_SRC"], "out", "Module.symvers")
 
 print(f"Downloading: {url}")
 data = urllib.request.urlopen(url).read()
@@ -136,13 +132,11 @@ PY
           echo "Module.symvers"
           echo "========================================"
 
-          ls -lh "$GITHUB_WORKSPACE/kernel/out/Module.symvers"
+          ls -lh "$KERNEL_SRC/out/Module.symvers"
 
       - name: Build RTL8188EUS Module
         run: |
           set -euxo pipefail
-
-          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
 
           cd "$GITHUB_WORKSPACE"
 
@@ -150,7 +144,6 @@ PY
           echo "Compiler"
           echo "========================================"
 
-          which clang
           clang --version
 
           echo
@@ -170,11 +163,12 @@ PY
           make \
             ARCH=arm64 \
             CC=clang \
+            HOSTCC=clang \
             LLVM=1 \
             LLVM_IAS=1 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             -j"$(nproc)" \
-            KSRC="$GITHUB_WORKSPACE/kernel/out" \
+            KSRC="$KERNEL_SRC/out" \
             CONFIG_PLATFORM_I386_PC=n \
             CONFIG_PLATFORM_ARM_RPI=n \
             CONFIG_PLATFORM_ARM64_RPI=n \
