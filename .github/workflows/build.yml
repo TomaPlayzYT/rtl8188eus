@@ -42,31 +42,21 @@ jobs:
           make O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
           make O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare -j$(nproc)
           
-          # Auto-detect any symvers file uploaded to the repository, or fallback to direct download
-          if [ -f "$GITHUB_WORKSPACE/Module.symvers" ]; then
-            cp "$GITHUB_WORKSPACE/Module.symvers" "$GITHUB_WORKSPACE/kernel/out/Module.symvers"
-          elif [ -f "$GITHUB_WORKSPACE/vmlinux.symvers" ]; then
-            cp "$GITHUB_WORKSPACE/vmlinux.symvers" "$GITHUB_WORKSPACE/kernel/out/Module.symvers"
-          elif ls $GITHUB_WORKSPACE/*.symvers* 1> /dev/null 2>&1; then
-            cp $GITHUB_WORKSPACE/*.symvers* "$GITHUB_WORKSPACE/kernel/out/Module.symvers"
+          SYMFILE=$(find $GITHUB_WORKSPACE -maxdepth 3 -name "*.symvers*" | head -n 1)
+          
+          if [ -n "$SYMFILE" ]; then
+            echo "Found uploaded symvers at: $SYMFILE"
+            cp "$SYMFILE" "$GITHUB_WORKSPACE/kernel/out/Module.symvers"
           else
-            echo "No uploaded symvers found, fetching from Android prebuilts..."
-            curl -sSL "https://android.googlesource.com/kernel/prebuilts/5.15/arm64/+/refs/heads/main/Module.symvers?format=TEXT" | base64 -d > "$GITHUB_WORKSPACE/kernel/out/Module.symvers"
+            echo "No uploaded symvers found. Fetching from Android prebuilts using Python..."
+            python3 -c "import urllib.request, base64; url='https://android.googlesource.com/kernel/prebuilts/5.15/arm64/+/refs/heads/main/Module.symvers?format=TEXT'; data=urllib.request.urlopen(url).read(); open('$GITHUB_WORKSPACE/kernel/out/Module.symvers', 'wb').write(base64.b64decode(data))"
           fi
 
-          - name: Build RTL8188EUS Module
-          run: |
+      - name: Build RTL8188EUS Module
+        run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           cd $GITHUB_WORKSPACE/rtl8188eus
-          make ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- \
-            KSRC=$GITHUB_WORKSPACE/kernel/out \
-            CONFIG_PLATFORM_I386_PC=n \
-            CONFIG_PLATFORM_ARM_AARCH64=y \
-            CONFIG_PLATFORM_ARM64=y \
-            CONFIG_LITTLE_ENDIAN=y \
-            USER_EXTRA_CFLAGS="-DCONFIG_LITTLE_ENDIAN -Wno-error -Wno-unused-variable -Wno-parentheses-equality -Wno-undef" \
-            EXTRA_CFLAGS="-DCONFIG_LITTLE_ENDIAN -Wno-error -Wno-unused-variable -Wno-parentheses-equality -Wno-undef" \
-            -j$(nproc)
+          make ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc) KSRC=$GITHUB_WORKSPACE/kernel/out CONFIG_PLATFORM_I386_PC=n CONFIG_PLATFORM_ARM_AARCH64=y CONFIG_PLATFORM_ARM64=y CONFIG_LITTLE_ENDIAN=y USER_EXTRA_CFLAGS="-DCONFIG_LITTLE_ENDIAN -Wno-error -Wno-unused-variable -Wno-parentheses-equality -Wno-undef" EXTRA_CFLAGS="-DCONFIG_LITTLE_ENDIAN -Wno-error -Wno-unused-variable -Wno-parentheses-equality -Wno-undef"
 
       - name: Upload Module Artifact
         uses: actions/upload-artifact@v4
