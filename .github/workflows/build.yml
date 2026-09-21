@@ -67,26 +67,24 @@ jobs:
           git clone https://github.com/aircrack-ng/rtl8188eus.git driver
           git -C driver checkout cf0271056c6d28a260a35ea7e5791230c8504abf
 
-          # Critical: switch off x86 platform, enable arm64
-          # (avoids -mhard-float which breaks aarch64-linux-gnu-gcc)
+          # Disable x86 platform (injects -mhard-float, breaks aarch64)
           sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/' driver/Makefile
+          # Enable arm64 platform flags
           sed -i 's/CONFIG_PLATFORM_ARM64_RPI = n/CONFIG_PLATFORM_ARM64_RPI = y/' driver/Makefile
-
-          # Optional but useful for Android/GKI builds
-          # Ensure little-endian + cfg80211 flags are present (ARM64_RPI already adds most of them)
-          grep -q 'CONFIG_LITTLE_ENDIAN' driver/Makefile || \
-            echo 'EXTRA_CFLAGS += -DCONFIG_LITTLE_ENDIAN' >> driver/Makefile
 
       - name: Build driver module
         env:
           KERNEL_VERSION: ${{ inputs.kernel_version }}
         run: |
           set -euo pipefail
+          # CONFIG_RTL8188EU=m is required because the driver's Makefile
+          # only sets it in the non-KERNELRELEASE branch.
           make -C gki_headers \
             ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             M="$GITHUB_WORKSPACE/driver" \
             KERNELRELEASE="$KERNEL_VERSION" \
+            CONFIG_RTL8188EU=m \
             modules \
             -j"$(nproc)"
 
@@ -104,7 +102,6 @@ jobs:
             exit 1
           fi
           file driver/8188eu.ko
-          # Optional: show vermagic
           modinfo -F vermagic driver/8188eu.ko || true
 
       - name: Upload 8188eu module
