@@ -3,40 +3,88 @@ name: Build 8188eu Driver Module
 on:
   workflow_dispatch:
     inputs:
-      kernel_version:
-        description: 'Target uname -r'
+      kernel_ref:
+        description: "Android common kernel branch or commit"
         required: true
-        default: '5.15.189-android13-8-00018-g9c82b71884fd-ab14885418'
+        default: "android13-5.15"
+      kernel_version:
+        description: "Target kernel release string"
+        required: true
+        default: "5.15.189-android13-8-00018-g9c82b71884fd-ab14885418"
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
-      - name: Install Dependencies
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu build-essential bc bison flex libssl-dev libelf-dev git wget
+          sudo apt-get install -y \
+            bc \
+            bison \
+            build-essential \
+            flex \
+            gcc-aarch64-linux-gnu \
+            git \
+            libelf-dev \
+            libssl-dev \
+            wget
 
-      - name: Fetch Android GKI Kernel Headers
+      - name: Fetch Android GKI kernel headers
+        env:
+          KERNEL_REF: ${{ inputs.kernel_ref }}
         run: |
-          mkdir -p gki_headers
-          cd gki_headers
-          git clone --depth 1 -b android13-5.15 https://android.googlesource.com/kernel/common .
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- prepare modules_prepare -j$(nproc)
+          git clone --depth 1 \
+            --branch "$KERNEL_REF" \
+            https://android.googlesource.com/kernel/common \
+            gki_headers
 
-      - name: Clone Driver Source
+          make -C gki_headers \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            gki_defconfig
+
+          make -C gki_headers \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            olddefconfig
+
+          make -C gki_headers \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            prepare modules_prepare \
+            -j"$(nproc)"
+
+      - name: Fetch kernel-compatible driver source
         run: |
+          rm -rf driver
           git clone https://github.com/aircrack-ng/rtl8188eus.git driver
+          git -C driver checkout cf0271056c6d28a260a35ea7e5791230c8504abf
 
-      - name: Build Module against GKI Headers
+      - name: Build driver module
+        env:
+          KERNEL_VERSION: ${{ inputs.kernel_version }}
         run: |
-          cd driver
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KSRC=$(pwd)/../gki_headers KBUILD_KVER=${{ github.event.inputs.kernel_version }} -j$(nproc)
+          make -C gki_headers \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            M="$GITHUB_WORKSPACE/driver" \
+            KERNELRELEASE="$KERNEL_VERSION" \
+            modules \
+            -j"$(nproc)"
 
-      - name: Upload 8188eu.ko Artifact
+      - name: Verify module
+        run: |
+          test -f driver/8188eu.ko
+          file driver/8188eu.ko
+
+      - name: Upload 8188eu module
         uses: actions/upload-artifact@v4
         with:
-          name: 8188eu-module
+          name: 8188eu-module-${{ inputs.kernel_version }}
           path: driver/8188eu.ko
+          if-no-files-found: error
