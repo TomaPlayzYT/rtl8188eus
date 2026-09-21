@@ -65,20 +65,28 @@ jobs:
           set -euo pipefail
           rm -rf driver
           git clone https://github.com/aircrack-ng/rtl8188eus.git driver
-          git -C driver checkout cf0271056c6d28a260a35ea7e5791230c8504abf
+          # Use tip of v5.3.9 (has 5.15/5.19/6.x guards)
+          git -C driver checkout v5.3.9
 
-          # Disable x86 platform (injects -mhard-float, breaks aarch64)
+          # Disable x86 platform (avoids -mhard-float)
           sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/' driver/Makefile
-          # Enable arm64 platform flags
           sed -i 's/CONFIG_PLATFORM_ARM64_RPI = n/CONFIG_PLATFORM_ARM64_RPI = y/' driver/Makefile
+
+          # Android GKI 5.15 backported several post-5.19 cfg80211 APIs.
+          # Lower the version gates so the driver matches the actual headers.
+          CFG=driver/os_dep/linux/ioctl_cfg80211.c
+          # ch_switch_notify / stop_ap / current_bss -> treated as >= 5.19
+          sed -i 's/KERNEL_VERSION(5, 19, 0)/KERNEL_VERSION(5, 15, 0)/g' "$CFG"
+          # key ops (add_key/get_key/del_key/set_default_*) link_id -> treated as >= 6.1
+          sed -i 's/KERNEL_VERSION(6, 1, 0)/KERNEL_VERSION(5, 15, 0)/g' "$CFG"
+          # roam_info.links[] (6.0+)
+          sed -i 's/KERNEL_VERSION(6, 0, 0)/KERNEL_VERSION(5, 15, 0)/g' "$CFG"
 
       - name: Build driver module
         env:
           KERNEL_VERSION: ${{ inputs.kernel_version }}
         run: |
           set -euo pipefail
-          # CONFIG_RTL8188EU=m is required because the driver's Makefile
-          # only sets it in the non-KERNELRELEASE branch.
           make -C gki_headers \
             ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- \
