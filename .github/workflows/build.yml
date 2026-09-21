@@ -13,19 +13,28 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Install Dependencies & Toolchain
+      - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu build-essential bc bison flex libssl-dev git
+          sudo apt-get install -y gcc-aarch64-linux-gnu build-essential bc bison flex libssl-dev git wget
+
+      - name: Fetch Android GKI Kernel Headers
+        run: |
+          mkdir -p gki_headers
+          cd gki_headers
+          # Pull GKI 5.15 common kernel source tree for headers
+          git clone --depth 1 -b android12-5.15 https://android.googlesource.com/kernel/common .
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- prepare modules_prepare -j$(nproc)
 
       - name: Clone Driver Source
         run: |
           git clone https://github.com/aircrack-ng/rtl8188eus.git driver
 
-      - name: Build Module
+      - name: Build Module against GKI Headers
         run: |
           cd driver
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KBUILD_KVER=${{ github.event.inputs.kernel_version }} -j$(nproc)
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KSRC=$(pwd)/../gki_headers KBUILD_KVER=${{ github.event.inputs.kernel_version }} -j$(nproc)
 
       - name: Upload 8188eu.ko Artifact
         uses: actions/upload-artifact@v4
