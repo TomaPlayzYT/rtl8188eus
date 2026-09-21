@@ -1,1 +1,36 @@
+name: Build 8188eu Driver Module
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_version:
+        description: 'Target uname -r (e.g. 5.15.74-android13-9-g123456)'
+        required: true
+        default: '5.15.0-generic'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install Cross Compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu build-essential bc bison flex libssl-dev
+
+      - name: Checkout Driver Source
+        uses: actions/checkout@v3
+        with:
+          repository: 'aircrack-ng/rtl8188eus'
+          ref: 'v5.3.9'
+
+      - name: Build Module
+        run: |
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KBUILD_KVER=${{ github.event.inputs.kernel_version }} -j$(nproc)
+
+      - name: Upload 8188eu.ko Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: 8188eu-${{ github.event.inputs.kernel_version }}.ko
+          path: 8188eu.ko
 
