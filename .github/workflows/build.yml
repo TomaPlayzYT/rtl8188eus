@@ -2,6 +2,22 @@ name: Build rtl8188eu for Moto G77
 
 on:
   workflow_dispatch:
+    inputs:
+      kernel_repo:
+        description: "Moto G77 kernel Git repository"
+        required: true
+        type: string
+
+      kernel_branch:
+        description: "Kernel branch or commit"
+        required: true
+        type: string
+
+      defconfig:
+        description: "Kernel defconfig"
+        required: true
+        default: "gki_defconfig"
+        type: string
 
 jobs:
   build:
@@ -11,6 +27,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt update
+
           sudo apt install -y \
             build-essential \
             clang \
@@ -24,56 +41,150 @@ jobs:
             libssl-dev \
             libelf-dev \
             dwarves \
-            git
+            git \
+            cpio \
+            rsync
 
       - name: Clone rtl8188eus
         run: |
           git clone \
             --branch v5.7.6.1 \
             --depth 1 \
-            https://github.com/aircrack-ng/rtl8188eus.git
+            https://github.com/aircrack-ng/rtl8188eus.git \
+            rtl8188eus
 
-      - name: Clone Moto G77 kernel
+      - name: Clone kernel
+        env:
+          KERNEL_REPO: ${{ inputs.kernel_repo }}
+          KERNEL_BRANCH: ${{ inputs.kernel_branch }}
         run: |
           git clone \
-            https://github.com/MotorolaMobilityLLC/kernel-mtk.git \
+            --branch "$KERNEL_BRANCH" \
+            --depth 1 \
+            "$KERNEL_REPO" \
             kernel
 
           cd kernel
 
-          git fetch --all --tags
+          echo "Kernel commit:"
+          git rev-parse HEAD
 
-          git log --all --oneline --decorate \
-            --grep='g9c82b71884fd' \
-            -n 5
+          echo "Kernel version:"
+          make -s kernelversion || true
 
-      - name: Verify target kernel
+      - name: Configure kernel
+        working-directory: kernel
+        env:
+          DEFCONFIG: ${{ inputs.defconfig }}
+        run: |
+          make \
+            ARCH=arm64 \
+            LLVM=1 \
+            "$DEFCONFIG"
+
+          make \
+            ARCH=arm64 \
+            LLVM=1 \
+            olddefconfig
+
+      - name: Prepare kernel
         working-directory: kernel
         run: |
-          echo "Target:"
-          echo "5.15.189-android13-8-00018-g9c82b71884fd-ab14885418"
+          make \
+            ARCH=arm64 \
+            LLVM=1 \
+            prepare
 
+          make \
+            ARCH=arm64 \
+            LLVM=1 \
+            modules_prepare
+
+      - name: Show kernel information
+        working-directory: kernel
+        run: |
+          echo "======================================"
+          echo "Kernel information"
+          echo "======================================"
+
+          echo "Make kernelversion:"
           make -s kernelversion || true
+
+          echo
+          echo "UTS release:"
+          grep -R "UTS_RELEASE" include/generated/utsrelease.h 2>/dev/null || true
+
+          echo
+          echo "Config:"
+          grep -E \
+            'CONFIG_MODVERSIONS=|CONFIG_LOCALVERSION=|CONFIG_LOCALVERSION_AUTO=|CONFIG_LTO_CLANG=' \
+            .config || true
+
+          echo
+          echo "Module.symvers:"
+          ls -lh Module.symvers 2>/dev/null || echo "WARNING: Module.symvers is missing"
 
       - name: Build 8188eu
         working-directory: rtl8188eus
         run: |
           make clean || true
 
-          make -j$(nproc) \
-            KSRC=$GITHUB_WORKSPACE/kernel \
+          make -j"$(nproc)" \
+            KSRC="$GITHUB_WORKSPACE/kernel" \
             ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             LLVM=1
 
-      - name: Check module
+      - name: Verify module
         working-directory: rtl8188eus
         run: |
+          echo "======================================"
+          echo "Module verification"
+          echo "======================================"
+
           test -f 8188eu.ko
-          modinfo 8188eu.ko | grep -E '^(filename|vermagic):'
+
+          echo
+          echo "File:"
+          file 8188eu.ko
+
+          echo
+          echo "Size:"
+          ls -lh 8188eu.ko
+
+          echo
+          echo "Modinfo:"
+          modinfo 8188eu.ko || true
+
+          echo
+          echo "Vermagic:"
+          modinfo 8188eu.ko | grep '^vermagic:' || true
+
+      - name: Check expected kernel version
+        working-directory: rtl8188eus
+        run: |
+          EXPECTED="5.15.189-android13-8-00018-g9c82b71884fd-ab14885418"
+
+          echo "Expected:"
+          echo "$EXPECTED"
+
+          echo
+          echo "Built module:"
+          modinfo 8188eu.ko | grep '^vermagic:' || true
 
       - name: Upload 8188eu.ko
         uses: actions/upload-artifact@v4
         with:
           name: 8188eu-moto-g77
           path: rtl8188eus/8188eu.ko
+          if-no-files-found: error
+
+      - name: Upload build information
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-build-info
+          path: |
+            kernel/.config
+            kernel/Module.symvers
+            rtl8188eus/Module.symvers
+          if-no-files-found: warn
