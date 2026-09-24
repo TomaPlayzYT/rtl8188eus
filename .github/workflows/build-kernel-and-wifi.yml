@@ -1,0 +1,61 @@
+name: Build Kernel & rtl8188eus
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Kernel and Module
+    runs-on: ubuntu-22.04
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # 1. Download the kernel manually so we can target its directory later
+      - name: Clone Kernel Source locally
+        run: |
+          # TODO: Replace the URL and branch with your specific Android 13 5.15 kernel
+          git clone https://github.com/USERNAME/YOUR_KERNEL_REPO.git -b YOUR_BRANCH kernel_workspace/
+
+      # 2. Compile the kernel using the Android Kernel Build Action
+      - name: Build Kernel using Android Kernel Build Action
+        uses: dabao1955/kernel_build_action@main
+        with:
+          # Point the action to the local folder we just cloned
+          kernel-url: kernel_workspace/
+          # TODO: Change this to your device's defconfig (e.g., gki_defconfig)
+          config: your_defconfig 
+          arch: arm64
+          android-version: 12 # Required by the Action to pull AOSP Clang
+          aosp-clang: true
+
+      # 3. Build the aircrack-ng driver against the newly compiled kernel
+      - name: Clone and Compile aircrack-ng rtl8188eus
+        run: |
+          # Clone the driver repository
+          git clone https://github.com/aircrack-ng/rtl8188eus.git
+          cd rtl8188eus
+          
+          # Turn off standard x86 PC build in the Makefile
+          sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/g' Makefile
+          
+          # The Kernel Action leaves the compiled output in kernel_workspace/out.
+          # It also leaves the downloaded AOSP Clang toolchain in the environment PATH.
+          # Android 13 5.15 requires LLVM=1 and LLVM_IAS=1 for Clang compilation.
+          
+          make ARCH=arm64 \
+               CC=clang \
+               HOSTCC=clang \
+               LLVM=1 \
+               LLVM_IAS=1 \
+               CROSS_COMPILE=aarch64-linux-gnu- \
+               KSRC=${{ github.workspace }}/kernel_workspace/out \
+               modules
+
+      # 4. Upload the .ko file so you can download it from GitHub
+      - name: Upload rtl8188eus Module
+        uses: actions/upload-artifact@v4
+        with:
+          name: 8188eu-module
+          path: rtl8188eus/8188eu.ko
